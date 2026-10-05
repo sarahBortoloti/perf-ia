@@ -7,6 +7,7 @@ import type { RepositoryAnalysis } from '../../repository/types.js';
 import type { Entrypoint } from '../../flow/models.js';
 import { safeName } from '../../shared/safe-name.js';
 import { sanitizeSensitiveData } from '../../security/sensitive-data-sanitizer.js';
+import { formatRepositoryDiagnostics, formatEndpointWarning } from '../../repository/repository-diagnostics.js';
 
 export async function validateRepositoryPath(path: string): Promise<true | string> {
   try {
@@ -35,12 +36,15 @@ export async function promptGenerate(): Promise<{
   const application = (await input({ message: 'Qual o nome da aplicação?', validate: (value) => value.trim() ? true : 'Informe o nome da aplicação.' })).trim();
   const repository = (await input({ message: 'Informe o caminho do repositório:', validate: validateRepositoryPath })).trim();
   const analysis = await analyzeRepository(repository);
+  console.log(formatRepositoryDiagnostics(analysis));
   const endpoints = repositoryEndpoints(analysis);
   if (!endpoints.length) throw new Error('Nenhum endpoint encontrado no repositório.');
   const entrypoint = await select<Entrypoint>({
     message: 'Qual endpoint deseja virtualizar?',
     choices: endpoints.map((endpoint) => ({ name: sanitizeSensitiveData(`${endpoint.method} ${endpoint.path}`), value: endpoint })),
   });
+  const warning = formatEndpointWarning(analysis, entrypoint);
+  if (warning) console.warn(warning);
   const logs = (await input({ message: 'Informe o caminho do arquivo de logs (.txt ou .log):', validate: validateLogPath })).trim();
   const traceId = (await input({ message: 'Possui Trace ID? (opcional)' })).trim() || undefined;
   return { application, repository, flow: safeName(entrypoint.path), logs, traceId, entrypoint, analysis };

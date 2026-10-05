@@ -1,6 +1,6 @@
 import { input, select } from '@inquirer/prompts';
 import * as fs from 'node:fs/promises';
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { promptGenerate, validateRepositoryPath, validateLogPath, repositoryEndpoints } from '../src/cli/commands/interactive-generate.js';
 import { selectArgumentEntrypoint } from '../src/cli/commands/generate-workflow.js';
 import { analyzeRepository } from '../src/repository/index.js';
@@ -14,7 +14,12 @@ vi.mock('node:fs/promises', async (load) => {
   return { ...actual, access: vi.fn(actual.access) };
 });
 const temporary: string[] = [];
+beforeEach(() => {
+  vi.spyOn(console, 'log').mockImplementation(() => {});
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   await Promise.all(temporary.splice(0).map((path) => fs.rm(path, { recursive: true, force: true })));
 });
@@ -48,6 +53,35 @@ describe('interactive generation', () => {
     temporary.push(directory);
     vi.mocked(input).mockResolvedValueOnce('demo-api').mockResolvedValueOnce(directory);
     await expect(promptGenerate()).rejects.toThrow('Nenhum endpoint');
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it('shows skipped-file diagnostics before selection and warns when the selected endpoint depends on a skipped type', async () => {
+    const root = await fs.mkdtemp(join(tmpdir(), 'perf-ai-partial-repository-'));
+    temporary.push(root);
+    await fs.writeFile(join(root, 'Controller.java'), '@RestController class Controller { private final BrokenService service; @GetMapping("/partial") String partial() { return service.read(); } }');
+    await fs.writeFile(join(root, 'BrokenService.java'), '@Service class BrokenService {');
+    vi.mocked(input).mockResolvedValueOnce('demo-api').mockResolvedValueOnce(root).mockResolvedValueOnce('./examples/logs/aceite.log').mockResolvedValueOnce('');
+    vi.mocked(select).mockImplementationOnce(() => {
+      const report = vi.mocked(console.log).mock.calls.flat().join('\n');
+      expect(report).toContain('✓ 1 Java files analyzed');
+      expect(report).toContain('⚠ 1 Java files skipped');
+      expect(report).toContain('BrokenService.java — Unbalanced Java delimiters');
+      return Object.assign(Promise.resolve({ method: 'GET', path: '/partial' }), { cancel: () => {} });
+    });
+    const result = await promptGenerate();
+    expect(result.analysis.incomplete).toBe(true);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Repository analysis incomplete for endpoint GET /partial'));
+    expect(vi.mocked(console.warn).mock.calls.flat().join('\n')).toContain('BrokenService.java');
+  });
+
+  it('reports malformed files even when no endpoint remains selectable', async () => {
+    const root = await fs.mkdtemp(join(tmpdir(), 'perf-ai-malformed-repository-'));
+    temporary.push(root);
+    await fs.writeFile(join(root, 'BrokenController.java'), '@RestController class BrokenController {');
+    vi.mocked(input).mockResolvedValueOnce('demo-api').mockResolvedValueOnce(root);
+    await expect(promptGenerate()).rejects.toThrow('Nenhum endpoint');
+    expect(vi.mocked(console.log).mock.calls.flat().join('\n')).toContain('BrokenController.java — Unbalanced Java delimiters');
     expect(select).not.toHaveBeenCalled();
   });
 

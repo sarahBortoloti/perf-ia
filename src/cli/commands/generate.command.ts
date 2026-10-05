@@ -3,6 +3,7 @@ import { analyzeRepository } from '../../repository/index.js';
 import { sanitizeSensitiveData } from '../../security/sensitive-data-sanitizer.js';
 import { promptGenerate, validateRepositoryPath, validateLogPath } from './interactive-generate.js';
 import { generateWorkflow, selectArgumentEntrypoint } from './generate-workflow.js';
+import { formatRepositoryDiagnostics, formatEndpointWarning } from '../../repository/repository-diagnostics.js';
 
 interface GenerateOptions {
   application?: string;
@@ -42,16 +43,19 @@ export function registerGenerateCommand(program: Command): void {
         const analysis = await analyzeRepository(options.repository!);
         const endpoints = analysis.controllers.flatMap((controller) => controller.endpoints);
         if (options.logs) {
+          console.log(formatRepositoryDiagnostics(analysis));
           stage = 'log';
           const validLog = await validateLogPath(options.logs);
           if (validLog !== true) throw new Error(`Log file does not exist, cannot be read, or is invalid: ${validLog}`);
           const entrypoint = await selectArgumentEntrypoint(analysis, options.logs, options.traceId, options.endpoint);
+          const warning = formatEndpointWarning(analysis, entrypoint);
+          if (warning) console.warn(warning);
           stage = 'generation';
           await generateWorkflow({ application: options.application!, flow: options.flow!, entrypoint, repository: analysis, logPath: options.logs, traceId: options.traceId });
         } else {
           // Preserve the previous repository-only invocation.
           console.log(sanitizeSensitiveData([
-            'Repository analyzed', '', `Application: ${options.application}`, `Controllers: ${analysis.controllers.length}`,
+            formatRepositoryDiagnostics(analysis), '', `Application: ${options.application}`, `Controllers: ${analysis.controllers.length}`,
             `Endpoints: ${endpoints.length}`, `Feign clients: ${analysis.feignClients.length}`, '', 'Endpoints encontrados:',
             ...endpoints.map((endpoint) => `${endpoint.httpMethod} ${endpoint.path}`), '', 'External clients:',
             ...analysis.feignClients.map((client) => client.clientName ?? client.name),

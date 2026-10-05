@@ -34,10 +34,19 @@ export interface RepositoryAnalysis {
   feignClients: FeignClient[];
   configurationFiles: ConfigurationFile[];
   javaTypes?: JavaType[];
+  javaFilesAnalyzed?: number;
+  skippedJavaFiles?: SkippedJavaFile[];
+  incomplete?: boolean;
+}
+
+export interface SkippedJavaFile {
+  filePath: string;
+  reason: string;
+  declaredTypes: string[];
 }
 
 export interface JavaInvocation { receiver?: string; method: string }
-export interface JavaMethod { name: string; returnType: string; invocations: JavaInvocation[] }
+export interface JavaMethod { name: string; returnType: string; parameterTypes?: string[]; invocations: JavaInvocation[] }
 export interface JavaType {
   name: string;
   packageName: string;

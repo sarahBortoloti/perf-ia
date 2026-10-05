@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProgram } from '../src/cli/index.js';
 import * as repository from '../src/repository/index.js';
@@ -50,7 +50,7 @@ describe('CLI', () => {
       application: 'demo-api', repository: './examples/spring-app', flow: 'aceite',
     });
     expect(output).toHaveBeenCalledExactlyOnceWith([
-      'Repository analyzed', '', 'Application: demo-api', 'Controllers: 1', 'Endpoints: 4', 'Feign clients: 2',
+      'Repository analyzed', '✓ 5 Java files analyzed', '✓ 0 Java files skipped', '', 'Application: demo-api', 'Controllers: 1', 'Endpoints: 4', 'Feign clients: 2',
       '', 'Endpoints encontrados:', 'GET /products', 'POST /products', 'PUT /products/{id}', 'DELETE /products/{id}',
       '', 'External clients:', 'inventory', 'shipping',
     ].join('\n'));
@@ -87,6 +87,23 @@ describe('CLI', () => {
     await program.parseAsync(['generate'], { from: 'user' });
     expect(prompt).toHaveBeenCalledOnce();
     expect(output.mock.calls.flat().join('\n')).toContain('2 virtualization files generated.');
+  });
+
+  it('lists a malformed Java file and keeps the repository-only command successful', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'perf-ai-partial-cli-'));
+    temporary.push(root);
+    await writeFile(join(root, 'ValidController.java'), '@RestController class ValidController { @GetMapping("/valid") String valid() { return "{}"; } }');
+    await writeFile(join(root, 'Broken.java'), 'class Broken {');
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { program } = testProgram();
+    const args = [...requiredArgs];
+    args[args.indexOf('--repository') + 1] = root;
+    await program.parseAsync(args, { from: 'user' });
+    const report = output.mock.calls.flat().join('\n');
+    expect(report).toContain('✓ 1 Java files analyzed');
+    expect(report).toContain('⚠ 1 Java files skipped');
+    expect(report).toContain('Broken.java — Unbalanced Java delimiters');
+    expect(report).toContain('GET /valid');
   });
 
   it('reports log errors without printing sensitive data', async () => {
