@@ -7,7 +7,8 @@
     "perf-ai": "tsx src/cli/index.ts",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "lint": "eslint src tests --ext .ts"
+    "lint": "eslint src tests --ext .ts",
+    "generate": "tsx src/cli/index.ts generate"
   },
   "dependencies": {
     "@inquirer/prompts": "^7.10.1",

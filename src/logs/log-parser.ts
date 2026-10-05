@@ -17,6 +17,7 @@ export interface ParsedLogLine extends TraceIdentifiers {
   responseBody?: unknown;
   responseHeaders?: Record<string, unknown>;
   payload?: unknown;
+  jsonFragment?: string;
 }
 export interface LogAnalysis {
   linesProcessed: number;
@@ -37,9 +38,10 @@ export function parseLogLine(input: string): ParsedLogLine {
   const response = extractResponse(input);
   const clientIdentity = /\[([\w.$]+)#([\w$]+)(?:\([^\]]*\))?\]/.exec(text);
   const requestId = /\brequest[-_]?id["']?\s*[:=]\s*["']?([\w.-]+)/i.exec(text)?.[1];
+  const jsonFragment = !timestamp && !identifiers.traceId && /^\s*(?:\{|\}|\[|\]|"|true\b|false\b|null\b|\d)/.test(text) ? text : undefined;
   return {
     text, ...identifiers, timestamp, http, httpCall, exception,
-    ...response, clientName: clientIdentity?.[1], clientMethod: clientIdentity?.[2], requestId,
+    ...response, clientName: clientIdentity?.[1], clientMethod: clientIdentity?.[2], requestId, jsonFragment,
     relevant: Boolean(identifiers.traceId || identifiers.correlationId || httpCall || http.status || http.durationMs !== undefined || http.client || exception || response.responseBody !== undefined || response.responseHeaders),
   };
 }
@@ -53,7 +55,7 @@ export async function analyzeLogs(filePath: string, traceId?: string, onRelevant
     metrics.linesProcessed++;
     const line = parseLogLine(rawLine);
     if (line.traceId) traces.add(line.traceId);
-    const continuation = !line.traceId && !line.timestamp && (/^\s*(?:at\s|Caused by:|Suppressed:|\.\.\. \d+ more)/.test(line.text) || line.payload !== undefined);
+    const continuation = !line.traceId && !line.timestamp && (/^\s*(?:at\s|Caused by:|Suppressed:|\.\.\. \d+ more)/.test(line.text) || line.payload !== undefined || line.jsonFragment !== undefined);
     const selected: boolean = traceId === undefined ? line.relevant || (selectedContinuation && continuation) : line.traceId === traceId || (selectedContinuation && continuation);
     if (!continuation) selectedContinuation = selected;
     if (!selected) continue;

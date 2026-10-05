@@ -37,7 +37,7 @@ export function extractResponse(line: string): { responseBody?: unknown; respons
   const headers = jsonField(line, 'response[-_]?headers');
   let payload: unknown;
   // Feign FULL logging may emit a JSON body as a separate line.
-  if (/^\s*[\[{]/.test(line)) {
+  if (/^\s*[[{]/.test(line)) {
     try { payload = sanitizeValue(JSON.parse(line)); } catch { /* Not a standalone JSON payload. */ }
   }
   return { responseBody, responseHeaders: headers && typeof headers === 'object' && !Array.isArray(headers) ? headers as Record<string, unknown> : undefined, payload };

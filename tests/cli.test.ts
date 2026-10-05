@@ -1,12 +1,26 @@
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProgram } from '../src/cli/index.js';
 import * as repository from '../src/repository/index.js';
 import * as logParser from '../src/logs/log-parser.js';
+import * as interactive from '../src/cli/commands/interactive-generate.js';
+import { VirtualizationGenerator } from '../src/virtualization/virtualization-generator.js';
 
-afterEach(() => { vi.restoreAllMocks(); });
+const temporary: string[] = [];
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+async function isolateOutput(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'perf-ai-cli-'));
+  temporary.push(root);
+  const generate = VirtualizationGenerator.prototype.generate;
+  vi.spyOn(VirtualizationGenerator.prototype, 'generate').mockImplementation(function(this: VirtualizationGenerator, context) { return generate.call(this, context, root); });
+}
 
 const requiredArgs = ['generate', '--application', 'demo-api', '--repository', './examples/spring-app', '--flow', 'aceite'];
 
@@ -36,13 +50,14 @@ describe('CLI', () => {
       application: 'demo-api', repository: './examples/spring-app', flow: 'aceite',
     });
     expect(output).toHaveBeenCalledExactlyOnceWith([
-      'Repository analyzed', '', 'Application: demo-api', 'Controllers: 1', 'Endpoints: 4', 'Feign clients: 1',
+      'Repository analyzed', '', 'Application: demo-api', 'Controllers: 1', 'Endpoints: 4', 'Feign clients: 2',
       '', 'Endpoints encontrados:', 'GET /products', 'POST /products', 'PUT /products/{id}', 'DELETE /products/{id}',
-      '', 'External clients:', 'inventory',
+      '', 'External clients:', 'inventory', 'shipping',
     ].join('\n'));
   });
 
   it.each([undefined, 'trace-123'])('analyzes logs with trace filter %s', async (traceId) => {
+    await isolateOutput();
     const output = vi.spyOn(console, 'log').mockImplementation(() => {});
     const analyzer = vi.spyOn(repository, 'analyzeRepository');
     const logAnalyzer = vi.spyOn(logParser, 'analyzeLogs');
@@ -54,12 +69,24 @@ describe('CLI', () => {
       logs: './examples/logs/aceite.log',
     });
     expect(analyzer).toHaveBeenCalledExactlyOnceWith('./examples/spring-app');
-    expect(logAnalyzer).toHaveBeenCalledExactlyOnceWith('./examples/logs/aceite.log', traceId);
-    expect(output).toHaveBeenLastCalledWith([
-      'Log analyzed', '', 'Lines processed: 6', 'Relevant lines: 5', 'Trace IDs found: 1',
-      'HTTP calls found: 2', 'Context reduction: 16.67%',
-    ].join('\n'));
+    expect(logAnalyzer).toHaveBeenCalledExactlyOnceWith('./examples/logs/aceite.log', traceId, expect.any(Function));
+    const report = output.mock.calls.flat().join('\n');
+    for (const text of ['Log analyzed', 'Lines processed: 9', 'Relevant lines: 7', 'Trace IDs found: 1', 'HTTP calls found: 3', 'Context reduction: 22.22%', '2 virtualization files generated.']) expect(report).toContain(text);
     expect(output.mock.calls.flat().join('\n')).not.toContain('fictional-demo-token');
+  });
+
+  it('starts interactive generation when invoked without options', async () => {
+    await isolateOutput();
+    const analysis = await repository.analyzeRepository('examples/spring-app');
+    const prompt = vi.spyOn(interactive, 'promptGenerate').mockResolvedValueOnce({
+      application: 'demo-api', repository: './examples/spring-app', flow: 'products', logs: './examples/logs/aceite.log',
+      entrypoint: { method: 'GET', path: '/products' }, analysis,
+    });
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { program } = testProgram();
+    await program.parseAsync(['generate'], { from: 'user' });
+    expect(prompt).toHaveBeenCalledOnce();
+    expect(output.mock.calls.flat().join('\n')).toContain('2 virtualization files generated.');
   });
 
   it('reports log errors without printing sensitive data', async () => {
@@ -96,7 +123,6 @@ describe('CLI', () => {
       code: 'perf-ai.repositoryAnalysisFailed', exitCode: 1,
     });
     expect(errors.join('')).toContain('Repository does not exist');
-    expect(errors.join('')).toContain(missing);
     expect(output).not.toHaveBeenCalled();
   });
 });

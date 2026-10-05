@@ -13,7 +13,8 @@ export interface HttpCall {
 
 export function extractHttpDetails(input: string): HttpCall {
   const line = sanitizeSensitiveData(input);
-  const method = /\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE|CONNECT)\b/i.exec(line)?.[1]?.toUpperCase();
+  const method = (/\b(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE|CONNECT)\s+(?:https?:\/\/|\/)/i.exec(line)?.[1]
+    ?? /\b(?:method|httpMethod)["']?\s*[:=]\s*["']?(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE|CONNECT)\b/i.exec(line)?.[1])?.toUpperCase();
   const url = /https?:\/\/[^\s"'<>\])},]+/i.exec(line)?.[0];
   const explicitPath = /\bpath["']?\s*[:=]\s*["']?(\/[^\s"',}\]]*)/i.exec(line)?.[1];
   const requestPath = /\b(?:GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|TRACE|CONNECT)\s+(\/[^\s"',}\]]*)/i.exec(line)?.[1];

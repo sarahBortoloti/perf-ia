@@ -1,63 +1,66 @@
 import type { Command } from 'commander';
 import { analyzeRepository } from '../../repository/index.js';
-import { analyzeLogs } from '../../logs/log-parser.js';
 import { sanitizeSensitiveData } from '../../security/sensitive-data-sanitizer.js';
+import { promptGenerate, validateRepositoryPath, validateLogPath } from './interactive-generate.js';
+import { generateWorkflow, selectArgumentEntrypoint } from './generate-workflow.js';
 
 interface GenerateOptions {
-  application: string;
-  repository: string;
-  flow: string;
+  application?: string;
+  repository?: string;
+  flow?: string;
   logs?: string;
   traceId?: string;
+  endpoint?: string;
 }
 
 export function registerGenerateCommand(program: Command): void {
   program.command('generate')
-    .description('Analyze a local Java/Spring Boot repository')
-    .requiredOption('--application <name>', 'Application name')
-    .requiredOption('--repository <path>', 'Path to the cloned repository')
-    .requiredOption('--flow <name>', 'Flow name')
+    .description('Analyze a local repository and generate virtualization files')
+    .option('--application <name>', 'Application name')
+    .option('--repository <path>', 'Path to the cloned repository')
+    .option('--flow <name>', 'Flow name')
     .option('--logs <path>', 'Path to a TXT or LOG file')
     .option('--trace-id <id>', 'Analyze only the selected trace in the log')
+    .option('--endpoint <method-path>', 'Select an endpoint when logs are ambiguous, e.g. "POST /items"')
     .action(async (options: GenerateOptions, command: Command) => {
-      let stage: 'repository' | 'log' = 'repository';
+      const interactive = Object.keys(options).length === 0;
+      if (!interactive) {
+        for (const name of ['application', 'repository', 'flow'] as const) {
+          if (!options[name]?.trim()) command.error(`error: required option '--${name} <${name === 'repository' ? 'path' : 'name'}>' not specified`, { code: 'commander.missingMandatoryOptionValue' });
+        }
+      }
+      let stage: 'repository' | 'log' | 'generation' = 'repository';
       try {
-        const analysis = await analyzeRepository(options.repository);
+        if (interactive) {
+          const input = await promptGenerate();
+          stage = 'generation';
+          await generateWorkflow({ application: input.application, flow: input.flow, entrypoint: input.entrypoint, repository: input.analysis, logPath: input.logs, traceId: input.traceId });
+          return;
+        }
+        const validRepository = await validateRepositoryPath(options.repository!);
+        if (validRepository !== true) throw new Error(`Repository does not exist or cannot be read: ${validRepository}`);
+        const analysis = await analyzeRepository(options.repository!);
         const endpoints = analysis.controllers.flatMap((controller) => controller.endpoints);
-        console.log(sanitizeSensitiveData([
-          'Repository analyzed',
-          '',
-          `Application: ${options.application}`,
-          `Controllers: ${analysis.controllers.length}`,
-          `Endpoints: ${endpoints.length}`,
-          `Feign clients: ${analysis.feignClients.length}`,
-          '',
-          'Endpoints encontrados:',
-          ...endpoints.map((endpoint) => `${endpoint.httpMethod} ${endpoint.path}`),
-          '',
-          'External clients:',
-          ...analysis.feignClients.map((client) => client.clientName ?? client.name),
-        ].join('\n')));
         if (options.logs) {
           stage = 'log';
-          const logs = await analyzeLogs(options.logs, options.traceId);
-          console.log([
-            'Log analyzed',
-            '',
-            `Lines processed: ${logs.linesProcessed}`,
-            `Relevant lines: ${logs.relevantLines}`,
-            `Trace IDs found: ${logs.traceIdsFound}`,
-            `HTTP calls found: ${logs.httpCallsFound}`,
-            `Context reduction: ${logs.contextReduction}%`,
-          ].join('\n'));
+          const validLog = await validateLogPath(options.logs);
+          if (validLog !== true) throw new Error(`Log file does not exist, cannot be read, or is invalid: ${validLog}`);
+          const entrypoint = await selectArgumentEntrypoint(analysis, options.logs, options.traceId, options.endpoint);
+          stage = 'generation';
+          await generateWorkflow({ application: options.application!, flow: options.flow!, entrypoint, repository: analysis, logPath: options.logs, traceId: options.traceId });
+        } else {
+          // Preserve the previous repository-only invocation.
+          console.log(sanitizeSensitiveData([
+            'Repository analyzed', '', `Application: ${options.application}`, `Controllers: ${analysis.controllers.length}`,
+            `Endpoints: ${endpoints.length}`, `Feign clients: ${analysis.feignClients.length}`, '', 'Endpoints encontrados:',
+            ...endpoints.map((endpoint) => `${endpoint.httpMethod} ${endpoint.path}`), '', 'External clients:',
+            ...analysis.feignClients.map((client) => client.clientName ?? client.name),
+          ].join('\n')));
         }
       } catch (error) {
-        const code = (error as NodeJS.ErrnoException)?.code;
-        const reason = code === 'ENOENT'
-          ? stage === 'repository' ? 'Repository does not exist' : 'Log file does not exist'
-          : error instanceof Error ? error.message : String(error);
-        command.error(sanitizeSensitiveData(`Unable to analyze ${stage} "${stage === 'repository' ? options.repository : options.logs}": ${reason}`), {
-          code: stage === 'repository' ? 'perf-ai.repositoryAnalysisFailed' : 'perf-ai.logAnalysisFailed',
+        const reason = error instanceof Error ? error.message : String(error);
+        command.error(sanitizeSensitiveData(`Unable to complete ${stage}: ${reason}`), {
+          code: stage === 'repository' ? 'perf-ai.repositoryAnalysisFailed' : stage === 'log' ? 'perf-ai.logAnalysisFailed' : 'perf-ai.generationFailed',
         });
       }
     });

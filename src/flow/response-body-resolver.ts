@@ -9,6 +9,18 @@ import { pathMatches } from './code-calls.js';
 
 type ObjectValue = Record<string, unknown>;
 function object(value: unknown): ObjectValue { return value && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {}; }
+function firstDefined(...values: unknown[]): unknown { return values.find((value) => value !== undefined); }
+function dereference(value: unknown, document: ObjectValue): ObjectValue {
+  let result = object(value);
+  const seen = new Set<string>();
+  while (typeof result.$ref === 'string' && result.$ref.startsWith('#/') && !seen.has(result.$ref)) {
+    seen.add(result.$ref);
+    let resolved: unknown = document;
+    for (const segment of result.$ref.slice(2).split('/')) resolved = object(resolved)[segment.replace(/~1/g, '/').replace(/~0/g, '~')];
+    result = object(resolved);
+  }
+  return result;
+}
 const ignored = new Set(['.git', 'node_modules', 'target', 'build', 'dist', '.gradle', '.idea']);
 
 export class ResponseBodyResolver {
@@ -23,9 +35,8 @@ export class ResponseBodyResolver {
         const path = join(directory, entry.name);
         if (entry.isDirectory() && !ignored.has(entry.name)) await visit(path);
         else if (entry.isFile() && /\.(json|ya?ml)$/i.test(entry.name)) {
-          // Read only potential API specifications or existing mock/fixture artifacts.
           const local = relative(this.repository.repositoryPath, path);
-          if (!/openapi|swagger|mock|fixture|stub/i.test(local)) continue;
+          if (/^(?:package(?:-lock)?|tsconfig)\.json$/i.test(entry.name) || /^application(?:-.*)?\.ya?ml$/i.test(entry.name)) continue;
           const text = await readFile(path, 'utf8');
           try {
             this.documents.push({ path: local, data: object(entry.name.endsWith('.json') ? JSON.parse(text) : parseYaml(text)) });
@@ -41,14 +52,16 @@ export class ResponseBodyResolver {
     for (const document of this.documents) {
       if (!document.data.openapi && !document.data.swagger) continue;
       for (const [path, operations] of Object.entries(object(document.data.paths))) {
-        if (!call.path || !pathMatches(path, call.path)) continue;
-        const operation = object(object(operations)[call.method?.toLowerCase() ?? '']);
+        const serverPath = typeof document.data.basePath === 'string' ? document.data.basePath
+          : (() => { try { return new URL(String(object((document.data.servers as unknown[] | undefined)?.[0]).url)).pathname.replace(/\/$/, ''); } catch { return ''; } })();
+        if (!call.path || (!pathMatches(path, call.path) && !pathMatches(serverPath + path, call.path))) continue;
+        const operation = dereference(dereference(operations, document.data)[call.method?.toLowerCase() ?? ''], document.data);
         const responses = object(operation.responses);
         const status = call.status !== undefined ? String(call.status) : Object.keys(responses).find((key) => /^2\d\d$/.test(key));
-        const response = object(responses[status ?? '']);
+        const response = dereference(responses[status ?? ''], document.data);
         const content = object(object(response.content)['application/json']);
-        const example = content.example ?? Object.values(object(content.examples)).map((item) => object(item).value).find((item) => item !== undefined)
-          ?? object(content.schema).example ?? object(response.examples)['application/json'];
+        const example = firstDefined(content.example, Object.values(object(content.examples)).map((item) => dereference(item, document.data).value).find((item) => item !== undefined),
+          dereference(content.schema, document.data).example, object(response.examples)['application/json']);
         if (example !== undefined) return { body: sanitizeValue(example), bodySource: 'OPENAPI', confidence: call.status === undefined ? 'MEDIUM' : 'HIGH', evidence: document.path };
       }
     }
@@ -61,7 +74,7 @@ export class ResponseBodyResolver {
       if (method !== call.method || typeof path !== 'string' || !call.path || !pathMatches(path, call.path)) continue;
       const status = response.status ?? document.data.status;
       if (call.status !== undefined && status !== undefined && status !== call.status) continue;
-      let body = response.jsonBody ?? response.body ?? document.data.responseBody;
+      let body = firstDefined(response.jsonBody, response.body, document.data.responseBody);
       if (typeof body === 'string') { try { body = JSON.parse(body); } catch { /* A literal text response is evidence too. */ } }
       if (body !== undefined) return { body: sanitizeValue(body), bodySource: 'EXISTING_MOCK', confidence: status === call.status && status !== undefined ? 'HIGH' : 'MEDIUM', evidence: document.path };
     }

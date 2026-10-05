@@ -149,7 +149,7 @@ describe('log parser and analysis', () => {
   });
 
   it('analyzes the fictional example with and without a trace filter', async () => {
-    const expected = { linesProcessed: 6, relevantLines: 5, traceIdsFound: 1, httpCallsFound: 2, externalHttpCallsFound: 1, contextReduction: 16.67 };
+    const expected = { linesProcessed: 9, relevantLines: 7, traceIdsFound: 1, httpCallsFound: 3, externalHttpCallsFound: 2, contextReduction: 22.22 };
     expect(await analyzeLogs('examples/logs/aceite.log')).toEqual(expected);
     expect(await analyzeLogs('examples/logs/aceite.log', 'trace-123')).toEqual(expected);
   });
