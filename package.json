@@ -1,0 +1,26 @@
+{
+  "name": "perf-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "perf-ai": "tsx src/cli/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "eslint src tests --ext .ts"
+  },
+  "dependencies": {
+    "commander": "^14.0.0",
+    "dotenv": "^17.2.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.37.0",
+    "@types/node": "^24.7.2",
+    "eslint": "^9.37.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.1",
+    "vitest": "^3.2.4"
+  }
+}
