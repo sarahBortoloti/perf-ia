@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProgram } from '../src/cli/index.js';
 import * as repository from '../src/repository/index.js';
+import * as logParser from '../src/logs/log-parser.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -41,15 +42,36 @@ describe('CLI', () => {
     ].join('\n'));
   });
 
-  it('accepts reserved logs and trace-id options without reading logs', async () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+  it.each([undefined, 'trace-123'])('analyzes logs with trace filter %s', async (traceId) => {
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
     const analyzer = vi.spyOn(repository, 'analyzeRepository');
+    const logAnalyzer = vi.spyOn(logParser, 'analyzeLogs');
     const { program } = testProgram();
-    await program.parseAsync([...requiredArgs, '--logs', '/nonexistent/logs', '--trace-id', 'trace-123'], { from: 'user' });
+    const args = [...requiredArgs, '--logs', './examples/logs/aceite.log'];
+    if (traceId) args.push('--trace-id', traceId);
+    await program.parseAsync(args, { from: 'user' });
     expect(program.commands.find((command) => command.name() === 'generate')?.opts()).toMatchObject({
-      logs: '/nonexistent/logs', traceId: 'trace-123',
+      logs: './examples/logs/aceite.log',
     });
     expect(analyzer).toHaveBeenCalledExactlyOnceWith('./examples/spring-app');
+    expect(logAnalyzer).toHaveBeenCalledExactlyOnceWith('./examples/logs/aceite.log', traceId);
+    expect(output).toHaveBeenLastCalledWith([
+      'Log analyzed', '', 'Lines processed: 6', 'Relevant lines: 5', 'Trace IDs found: 1',
+      'HTTP calls found: 2', 'Context reduction: 16.67%',
+    ].join('\n'));
+    expect(output.mock.calls.flat().join('\n')).not.toContain('fictional-demo-token');
+  });
+
+  it('reports log errors without printing sensitive data', async () => {
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { program, errors } = testProgram();
+    const missing = join(tmpdir(), `missing-${randomUUID()}-password=fictional-secret.log`);
+    await expect(program.parseAsync([...requiredArgs, '--logs', missing], { from: 'user' })).rejects.toMatchObject({
+      code: 'perf-ai.logAnalysisFailed', exitCode: 1,
+    });
+    expect(errors.join('')).toContain('Log file does not exist');
+    expect(errors.join('')).not.toContain('fictional-secret');
+    expect(output.mock.calls.flat().join('\n')).not.toContain('Log analyzed');
   });
 
   it.each(['--application', '--repository', '--flow'])('requires %s before analyzing', async (option) => {
