@@ -1,4 +1,4 @@
-import type { Endpoint, JavaAnnotation, JavaComponent, Controller, FeignClient } from './types.js';
+import type { Endpoint, JavaAnnotation, JavaComponent, Controller, FeignClient, JavaType, JavaInvocation } from './types.js';
 
 // Comments and literals are tokens, so their contents cannot become Java syntax.
 function tokenize(source: string): string[] {
@@ -68,11 +68,11 @@ function endpoints(annotations: JavaAnnotation[], name: string, basePaths: strin
     return basePaths.flatMap((base) => paths(a).flatMap((path) => methods.map((httpMethod) => ({ methodName: name, httpMethod, path: join(prefix, base, path) }))));
   });
 }
-export function parseJavaSource(source: string, filePath: string): { controllers: Controller[]; services: JavaComponent[]; feignClients: FeignClient[] } {
+export function parseJavaSource(source: string, filePath: string): { controllers: Controller[]; services: JavaComponent[]; feignClients: FeignClient[]; javaTypes: JavaType[] } {
   const tokens = tokenize(source);
   const packageIndex = tokens.indexOf('package');
   const packageName = packageIndex < 0 ? '' : tokens.slice(packageIndex + 1, tokens.indexOf(';', packageIndex)).join('');
-  const result: { controllers: Controller[]; services: JavaComponent[]; feignClients: FeignClient[] } = { controllers: [], services: [], feignClients: [] };
+  const result = { controllers: [] as Controller[], services: [] as JavaComponent[], feignClients: [] as FeignClient[], javaTypes: [] as JavaType[] };
   function scan(start: number, end: number): void {
     let pending: JavaAnnotation[] = [];
     for (let i = start; i < end;) {
@@ -90,28 +90,52 @@ export function parseJavaSource(source: string, filePath: string): { controllers
         const feign = pending.find((a) => a.name === 'FeignClient');
         const prefix = feign?.attributes.path?.[0] ?? '';
         const found: Endpoint[] = [];
+        const structure: JavaType = { name, packageName, filePath, fields: {}, methods: [] };
+        let memberStart = body + 1;
         let methodAnnotations: JavaAnnotation[] = [];
         for (let j = body + 1; j < bodyEnd;) {
           if (tokens[j] === '@') {
-            const [a, next] = annotation(tokens, j); methodAnnotations.push(a); j = next; continue;
+            const [a, next] = annotation(tokens, j); methodAnnotations.push(a); j = next; memberStart = j; continue;
           }
           if (['class', 'interface', 'record', 'enum'].includes(tokens[j])) {
             while (j < bodyEnd && tokens[j] !== '{') j++;
             if (j < bodyEnd) j = closing(tokens, j) + 1;
-            methodAnnotations = []; continue;
+            methodAnnotations = []; memberStart = j; continue;
           }
           if (tokens[j] === '(') {
             const methodName = tokens[j - 1];
             found.push(...endpoints(methodAnnotations, methodName, paths(mapping), prefix));
-            methodAnnotations = []; j = closing(tokens, j) + 1; continue;
+            const signature = tokens.slice(memberStart, j - 1).filter((t) => !['public', 'private', 'protected', 'static', 'final', 'abstract', 'default', 'synchronized'].includes(t)).join('');
+            const endParameters = closing(tokens, j);
+            let next = endParameters + 1;
+            while (next < bodyEnd && !['{', ';', '='].includes(tokens[next])) next++;
+            const invocations: JavaInvocation[] = [];
+            if (tokens[next] === '{') {
+              const endMethod = closing(tokens, next);
+              for (let k = next + 1; k < endMethod; k++) {
+                if (tokens[k + 1] === '(' && /^[A-Za-z_$][\w$]*$/.test(tokens[k])) {
+                  if (tokens[k - 1] === '.') invocations.push({ receiver: tokens[k - 2], method: tokens[k] });
+                  else if (!['if', 'for', 'while', 'switch', 'catch', 'new', 'return'].includes(tokens[k]) && tokens[k - 1] !== 'new') invocations.push({ method: tokens[k] });
+                }
+              }
+              next = endMethod + 1;
+            } else if (tokens[next] === ';') next++;
+            if (methodName !== name && signature) structure.methods.push({ name: methodName, returnType: signature, invocations });
+            methodAnnotations = []; j = next; memberStart = j; continue;
           }
-          if (tokens[j] === '{') { methodAnnotations = []; j = closing(tokens, j) + 1; continue; }
-          if (tokens[j] === ';' || tokens[j] === '=') methodAnnotations = [];
+          if (tokens[j] === '{') { methodAnnotations = []; j = closing(tokens, j) + 1; memberStart = j; continue; }
+          if (tokens[j] === ';' || tokens[j] === '=') {
+            const declaration = tokens.slice(memberStart, j).filter((t) => !['public', 'private', 'protected', 'static', 'final', 'volatile', 'transient'].includes(t));
+            const field = declaration.at(-1);
+            if (field && declaration.length > 1 && /^[A-Za-z_$][\w$]*$/.test(field)) structure.fields[field] = declaration.slice(0, -1).join('');
+            methodAnnotations = []; memberStart = j + 1;
+          }
           j++;
         }
         if (pending.some((a) => a.name === 'RestController')) result.controllers.push({ ...component, endpoints: found });
         if (pending.some((a) => a.name === 'Service')) result.services.push(component);
         if (feign) result.feignClients.push({ ...component, clientName: (feign.attributes.name ?? feign.attributes.value ?? feign.attributes.contextId)?.[0], url: feign.attributes.url?.[0], paths: paths(mapping).map((p) => join(prefix, p)), endpoints: found });
+        result.javaTypes.push(structure);
         scan(body + 1, bodyEnd);
         pending = []; i = bodyEnd + 1; continue;
       }

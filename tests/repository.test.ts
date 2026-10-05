@@ -71,7 +71,7 @@ describe('parseJavaSource', () => {
   });
 
   it('handles empty input and reports malformed delimiters', () => {
-    expect(parseJavaSource('', 'Empty.java')).toEqual({ controllers: [], services: [], feignClients: [] });
+    expect(parseJavaSource('', 'Empty.java')).toEqual({ controllers: [], services: [], feignClients: [], javaTypes: [] });
     expect(() => parseJavaSource('@RestController class Bad {', 'Bad.java')).toThrow('Unbalanced');
   });
 });

@@ -7,7 +7,7 @@ const ignored = new Set(['.git', 'node_modules', 'target', 'build', 'dist', '.gr
 export async function analyzeRepository(repositoryPath: string): Promise<RepositoryAnalysis> {
   const root = resolve(repositoryPath);
   if (!(await stat(root)).isDirectory()) throw new Error(`Repository path is not a directory: ${root}`);
-  const result: RepositoryAnalysis = { repositoryPath: root, controllers: [], services: [], feignClients: [], configurationFiles: [] };
+  const result: RepositoryAnalysis = { repositoryPath: root, controllers: [], services: [], feignClients: [], configurationFiles: [], javaTypes: [] };
   async function visit(directory: string): Promise<void> {
     const entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name, 'en'));
     for (const entry of entries) {
@@ -20,6 +20,7 @@ export async function analyzeRepository(repositoryPath: string): Promise<Reposit
           result.controllers.push(...parsed.controllers);
           result.services.push(...parsed.services);
           result.feignClients.push(...parsed.feignClients);
+          result.javaTypes!.push(...parsed.javaTypes);
         } else if (/^application(?:-[\w.-]+)?\.(properties|ya?ml)$/.test(entry.name)) {
           result.configurationFiles.push({ filePath, format: entry.name.endsWith('.properties') ? 'properties' : 'yaml', content: await readFile(absolutePath, 'utf8') });
         }

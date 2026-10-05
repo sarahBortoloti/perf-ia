@@ -33,4 +33,15 @@ export interface RepositoryAnalysis {
   services: JavaComponent[];
   feignClients: FeignClient[];
   configurationFiles: ConfigurationFile[];
+  javaTypes?: JavaType[];
+}
+
+export interface JavaInvocation { receiver?: string; method: string }
+export interface JavaMethod { name: string; returnType: string; invocations: JavaInvocation[] }
+export interface JavaType {
+  name: string;
+  packageName: string;
+  filePath: string;
+  fields: Record<string, string>;
+  methods: JavaMethod[];
 }

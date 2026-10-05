@@ -2,6 +2,7 @@ import { sanitizeSensitiveData } from '../security/sensitive-data-sanitizer.js';
 import { readLogLines } from './log-reader.js';
 import { extractTraceIdentifiers, type TraceIdentifiers } from './trace-extractor.js';
 import { extractHttpCall, extractHttpDetails, type HttpCall } from './http-call-extractor.js';
+import { extractResponse } from './response-extractor.js';
 
 export interface ParsedLogLine extends TraceIdentifiers {
   text: string;
@@ -10,6 +11,12 @@ export interface ParsedLogLine extends TraceIdentifiers {
   httpCall?: HttpCall;
   exception?: string;
   relevant: boolean;
+  clientName?: string;
+  clientMethod?: string;
+  requestId?: string;
+  responseBody?: unknown;
+  responseHeaders?: Record<string, unknown>;
+  payload?: unknown;
 }
 export interface LogAnalysis {
   linesProcessed: number;
@@ -27,14 +34,18 @@ export function parseLogLine(input: string): ParsedLogLine {
   const http = extractHttpDetails(text);
   const httpCall = extractHttpCall(text);
   const exception = /\b(?:[\w$]+\.)*[\w$]*(?:Exception|Error)\b(?:[^\r\n]*)/.exec(text)?.[0];
+  const response = extractResponse(input);
+  const clientIdentity = /\[([\w.$]+)#([\w$]+)(?:\([^\]]*\))?\]/.exec(text);
+  const requestId = /\brequest[-_]?id["']?\s*[:=]\s*["']?([\w.-]+)/i.exec(text)?.[1];
   return {
     text, ...identifiers, timestamp, http, httpCall, exception,
-    relevant: Boolean(identifiers.traceId || identifiers.correlationId || httpCall || http.status || http.durationMs !== undefined || http.client || exception),
+    ...response, clientName: clientIdentity?.[1], clientMethod: clientIdentity?.[2], requestId,
+    relevant: Boolean(identifiers.traceId || identifiers.correlationId || httpCall || http.status || http.durationMs !== undefined || http.client || exception || response.responseBody !== undefined || response.responseHeaders),
   };
 }
 
 /** Aggregate only counters and distinct trace IDs, never the file or its records. */
-export async function analyzeLogs(filePath: string, traceId?: string): Promise<LogAnalysis> {
+export async function analyzeLogs(filePath: string, traceId?: string, onRelevantLine?: (line: ParsedLogLine) => void): Promise<LogAnalysis> {
   const metrics: LogAnalysis = { linesProcessed: 0, relevantLines: 0, traceIdsFound: 0, httpCallsFound: 0, externalHttpCallsFound: 0, contextReduction: 0 };
   const traces = new Set<string>();
   let selectedContinuation = false;
@@ -42,11 +53,12 @@ export async function analyzeLogs(filePath: string, traceId?: string): Promise<L
     metrics.linesProcessed++;
     const line = parseLogLine(rawLine);
     if (line.traceId) traces.add(line.traceId);
-    const continuation = !line.traceId && !line.timestamp && /^\s*(?:at\s|Caused by:|Suppressed:|\.\.\. \d+ more)/.test(line.text);
+    const continuation = !line.traceId && !line.timestamp && (/^\s*(?:at\s|Caused by:|Suppressed:|\.\.\. \d+ more)/.test(line.text) || line.payload !== undefined);
     const selected: boolean = traceId === undefined ? line.relevant || (selectedContinuation && continuation) : line.traceId === traceId || (selectedContinuation && continuation);
     if (!continuation) selectedContinuation = selected;
     if (!selected) continue;
     metrics.relevantLines++;
+    onRelevantLine?.(line);
     if (line.httpCall) {
       metrics.httpCallsFound++;
       if (line.httpCall.external) metrics.externalHttpCallsFound++;
