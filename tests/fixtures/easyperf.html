@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<title>EasyPerf fictício — somente teste local</title>
+<section id="login">
+  <label>Usuário <input id="username"></label>
+  <label>Senha <input id="password" type="password"></label>
+  <button id="enter">Entrar</button>
+</section>
+<section id="home" hidden><button id="new">Nova Virtualização</button></section>
+<section id="form" hidden>
+  <label>Projeto / VS <select><option>Projeto fictício</option></select></label>
+  <label>Squad <select><option>Squad fictícia</option></select></label>
+  <button id="import">Importar Response</button>
+  <label>Escolher Arquivos <input id="files" type="file" multiple></label>
+  <span role="status" aria-label="Responses Importadas" id="count">0</span>
+  <button id="publish">Publicar Serviço</button>
+</section>
+<div role="alert" aria-label="Erro de Publicação" id="error" hidden>Erro fictício</div>
+<div role="dialog" aria-label="Resultado da Publicação" id="result" hidden>
+  <label>IP Base <input value="http://virtualization.example.test///" readonly></label>
+  <table aria-label="Endpoints Criados"><thead><tr><th>Método</th><th>Path</th></tr></thead><tbody id="endpoints"></tbody></table>
+</div>
+<script>
+  const byId = (id) => document.getElementById(id);
+  const imported = [];
+  byId('enter').onclick = () => { byId('login').hidden = true; byId('home').hidden = false; };
+  byId('new').onclick = () => { byId('home').hidden = true; byId('form').hidden = false; };
+  byId('files').onchange = async (event) => {
+    for (const file of event.target.files) imported.push(JSON.parse(await file.text()));
+    byId('count').textContent = String(imported.length);
+  };
+  byId('publish').onclick = () => {
+    if (document.body.dataset.outcome === 'timeout') return;
+    if (document.body.dataset.outcome === 'error') { byId('error').hidden = false; return; }
+    for (const item of imported) {
+      const row = document.createElement('tr');
+      const method = document.createElement('td'); method.textContent = item.response.metodo;
+      const path = document.createElement('td'); path.textContent = item.response.path;
+      row.append(method, path); byId('endpoints').append(row);
+    }
+    byId('result').hidden = false;
+  };
+</script>
+</html>

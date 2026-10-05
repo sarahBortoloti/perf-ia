@@ -113,7 +113,7 @@ o comando termina com erro se alguma falhar na validação.
 Dados sensíveis são mascarados antes de retornar/persistir bodies, headers ou
 exibir mensagens. O terminal apresenta somente resumos e nomes seguros.
 Arquivos REVIEW_REQUIRED devem ser revisados antes da importação no EasyPerf.
-Não há publicação, IA/LLM, Playwright, JMeter ou acesso a serviços de negócio.
+A geração não acessa o EasyPerf; publicação é um comando separado. Não há IA/LLM ou JMeter.
 
 ## Validação local
 
@@ -125,3 +125,62 @@ npm run lint
 
 Os exemplos e testes usam somente dados fictícios. O exemplo possui duas chamadas
 Feign: uma com body capturado e uma sem body para validar a revisão obrigatória.
+
+## Publicação no EasyPerf
+
+```bash
+npm run perf-ai -- publish --dry-run
+npm run publish
+```
+
+O checkbox mostra aplicação/fluxo/arquivo. Space seleciona, setas navegam e Enter
+confirma; nenhuma seleção ou Ctrl+C cancela. Todos os arquivos selecionados são
+validados antes do navegador. Metadata REVIEW_REQUIRED, reviewReasons ou metadata
+ilegível exige confirmação explícita. O dry run valida e lista os arquivos, sem
+navegador, acesso ao EasyPerf ou escrita de publication.json; não exige .env.
+
+Copie `.env.example` para `.env` e configure:
+
+```dotenv
+EASYPERF_BASE_URL=https://seu-easyperf/
+EASYPERF_PROJECT=Seu Projeto / VS
+EASYPERF_SQUAD=Sua Squad
+EASYPERF_MANUAL_LOGIN=true
+```
+
+BASE_URL é obrigatória na publicação real. Projeto e squad vazios são perguntados
+no terminal. Login manual abre um navegador visível e espera Enter depois da
+sua autenticação. Para login automático, defina EASYPERF_MANUAL_LOGIN=false e
+EASYPERF_USERNAME/EASYPERF_PASSWORD no .env. Credenciais e sessão não são gravadas
+nem exibidas. `.env` e `.env.*` são ignorados pelo Git, com exceção de .env.example.
+Instale o navegador localmente antes da publicação real:
+
+```bash
+npx playwright install chromium
+```
+
+**O DOM real do EasyPerf não foi disponibilizado nem acessado.** O perfil de UI em
+`src/easyperf/easyperf-page.ts` usa nomes acessíveis conceituais, verificados apenas
+na fixture HTML local. Ajuste esse arquivo contra a UI real antes do uso: login,
+navegação, comboboxes, input de upload, contador de responses importadas, modal de
+sucesso/erro e campos do resultado. Todos os seletores ficam nesse adaptador; ele
+não tenta contornar SSO, MFA ou CAPTCHA.
+
+O publisher usa Chromium com headless=false e sessão efêmera, importa múltiplos
+JSONs quando o input permite; caso contrário, importa um por vez aguardando o
+contador de confirmação. O upload usa buffers sanitizados e não modifica os
+arquivos originais. Aguarda sucesso/erro com locators e timeout, sem sleeps fixos.
+Não há retentativa automática de publicação.
+
+O resultado confirma os métodos/paths selecionados, normaliza IP Base e URLs e
+salva `output/<application>/<flow>/publication.json`. Seleções de vários fluxos
+geram um arquivo por fluxo com os respectivos endpoints. O arquivo registra
+application, flow, publishedAt, baseUrl e services (method/path/url), sem sessão.
+Publication.json representa a publicação mais recente daquele fluxo. Se houver
+falha depois de acionar Publicar Serviço, verifique o resultado no EasyPerf antes
+de repetir; o serviço pode ter sido criado mesmo sem confirmação local.
+
+Os testes usam `tests/fixtures/easyperf.html` com todas as requisições interceptadas
+localmente. Não usam EasyPerf real, internet ou credenciais reais. Para os testes
+com browser, Chromium deve estar instalado; Chrome local é utilizado como fallback
+quando Chromium não estiver disponível.
