@@ -1,0 +1,6 @@
+login:
+  url: ${LOGIN_URL:https://login.example.test}
+archive:
+  url: https://archive.example.test
+gateway:
+  url: https://gateway.example.test/gateway

@@ -14,7 +14,7 @@ async function directory(): Promise<string> {
   const path = await mkdtemp(join(tmpdir(), 'perf-ai-output-')); temporary.push(path); return path;
 }
 function call(patch: Partial<ExternalCall> = {}): ExternalCall {
-  return { order: 1, client: 'customer', method: 'POST', path: '/cws/v1/fwrk/flow/system', status: 200, source: 'LOG', responseBody: { fixture: true }, body: { fixture: true }, bodySource: 'LOG', confidence: 'HIGH', ...patch };
+  return { order: 1, client: 'customer', method: 'POST', path: '/cws/v1/fwrk/flow/system', status: 200, source: 'LOG', responseBody: { fixture: true }, bodySource: 'LOG', confidence: 'HIGH', ...patch };
 }
 function context(calls: ExternalCall[] = [call()]): FlowContext {
   return { application: 'demo-api', flow: 'aceite', entrypoint: { method: 'POST', path: '/termo/aceite' }, externalCalls: calls };
@@ -22,7 +22,7 @@ function context(calls: ExternalCall[] = [call()]): FlowContext {
 
 describe('VirtualizationTemplate and Validator', () => {
   it('produces exactly the EasyPerf contract with metadata kept outside', () => {
-    const template = createVirtualizationTemplate(call({ body: {} }));
+    const template = createVirtualizationTemplate(call({ responseBody: {} }));
     expect(template).toEqual({ response: { metodo: 'POST', path: '/cws/v1/fwrk/flow/system', status: 200, header: { 'Content-Type': 'application/json' }, body: {} } });
     expect(() => validateVirtualization(template)).not.toThrow();
     expect(JSON.stringify(template)).not.toContain('confidence');
@@ -41,8 +41,8 @@ describe('VirtualizationTemplate and Validator', () => {
     expect(() => validateVirtualization({})).toThrow('response');
     expect(() => validateVirtualization({ ...createVirtualizationTemplate(call()), metadata: {} })).toThrow('top-level');
     expect(() => validateVirtualization({ response: { ...createVirtualizationTemplate(call()).response, method: 'POST' } })).toThrow('exactly');
-    expect(() => validateVirtualization(createVirtualizationTemplate(call({ body: null })))).not.toThrow();
-    expect(() => validateVirtualization(createVirtualizationTemplate(call({ body: [] })))).not.toThrow();
+    expect(() => validateVirtualization(createVirtualizationTemplate(call({ responseBody: null })))).not.toThrow();
+    expect(() => validateVirtualization(createVirtualizationTemplate(call({ responseBody: [] })))).not.toThrow();
   });
 });
 
@@ -50,8 +50,8 @@ describe('VirtualizationGenerator', () => {
   it('writes sanitized context and contracts with unique names and confidence', async () => {
     const root = await directory();
     const generated = await new VirtualizationGenerator().generate(context([
-      call({ body: { secret: 'fictional-secret', cpf: '123.456.789-00' }, responseHeaders: { Authorization: 'Bearer fictional-auth', 'Content-Type': 'application/json' } }),
-      call({ order: 2, body: {}, responseBody: undefined, bodySource: 'EMPTY', confidence: 'REVIEW_REQUIRED' }),
+      call({ responseBody: { secret: 'fictional-secret', cpf: '123.456.789-00' }, responseHeaders: { Authorization: 'Bearer fictional-auth', 'Content-Type': 'application/json' } }),
+      call({ order: 2, path: '/different', responseBody: undefined, bodySource: 'EMPTY', confidence: 'REVIEW_REQUIRED' }),
     ]), root);
     expect(generated.files).toEqual([{ fileName: 'customer.json', confidence: 'HIGH' }, { fileName: 'customer-2.json', confidence: 'REVIEW_REQUIRED' }]);
     expect(generated.errors).toEqual([]);
@@ -76,14 +76,14 @@ describe('VirtualizationGenerator', () => {
     const generator = new VirtualizationGenerator();
     const first = await generator.generate(context(), root);
     const original = await readFile(join(first.directory, 'customer.json'), 'utf8');
-    const second = await generator.generate(context([call({ body: { changed: true } })]), root);
+    const second = await generator.generate(context([call({ responseBody: { changed: true } })]), root);
     expect(second.files[0].fileName).toBe('customer-2.json');
     expect(await readFile(join(first.directory, 'customer.json'), 'utf8')).toBe(original);
   });
 
   it('reports validation errors and skips invalid files', async () => {
     const root = await directory();
-    const result = await new VirtualizationGenerator().generate(context([call({ method: undefined }), call({ order: 2 })]), root);
+    const result = await new VirtualizationGenerator().generate(context([call({ method: undefined }), call({ order: 2, path: '/different' })]), root);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('response.metodo');
     expect(result.files).toHaveLength(1);

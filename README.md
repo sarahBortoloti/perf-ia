@@ -41,13 +41,17 @@ contra nomes reservados do Windows.
 endpoints, Feign Clients e configurações application.properties/yml/yaml, incluindo
 perfis. O parser Java usa tokens e balanceamento de delimitadores. Não executa
 Java nem resolve herança, meta-anotações ou expressões/constantes arbitrárias.
-O FlowBuilder segue chamadas explícitas controller → service → Feign; tipos ou
-métodos ambíguos não são inferidos. Invocações estáticas são possibilidades de
-execução, identificadas como `CODE`, e requerem revisão.
+O FlowBuilder segue chamadas explícitas controller → service/gateway/adapter/client.
+Além de Feign, descobre operações HTTP de RestTemplate, WebClient, RestClient e
+HttpClient/HttpRequest quando há método e URL identificáveis. Nomes de classes
+isolados não comprovam integrações. Referências `${property}`/`${VAR:default}`
+são seguidas até application.properties/yml; cadeias ambíguas ou cíclicas não são
+inferidas. Invocações estáticas são possibilidades de execução, identificadas
+como `CODE`, e requerem revisão.
 
 Logs são lidos por streaming, sem readFile nem cópia do arquivo original. O parser
 extrai trace/correlation IDs, timestamps, HTTP, status, duração, exceptions e
-indicações de Feign, RestTemplate e WebClient. As métricas guardam contadores e
+indicações de Feign, RestTemplate, WebClient e RestClient. As métricas guardam contadores e
 IDs distintos. A construção do fluxo guarda apenas chamadas e evidências de
 resposta necessárias para os artefatos, não as linhas do arquivo inteiro.
 
@@ -58,24 +62,31 @@ as chamadas do fluxo, quando disponíveis; sem essa evidência, o arquivo fornec
 A redução de contexto mede a porcentagem de linhas descartadas; arquivo vazio é
 0%. Requisições contam como chamadas; respostas não duplicam a contagem.
 
-A correlação de respostas usa trace, request/correlation ID e identificação do
-cliente/método. Respostas ambíguas ficam sem body/status atribuídos. São suportados
-`responseBody=<JSON>`, `responseHeaders=<JSON>` e payload JSON separado após uma
-resposta Feign, inclusive em múltiplas linhas. A acumulação de um payload em
-múltiplas linhas tem limite de 1 MiB; payloads incompletos/excessivos não viram
-evidência. Chamadas de código e log correlacionadas recebem `CODE_AND_LOG`;
-chamadas runtime sem correlação recebem `LOG`.
+A correlação prioriza trace + span/request/correlation ID, depois cliente
+explícito, depois método + URL/path. Thread e proximidade de tempo/sequência
+são fallback limitado e exigem revisão. IDs incompatíveis nunca permitem
+fallback para outra ocorrência. Respostas ambíguas ficam sem body/status
+atribuídos. São suportados `API REQUEST`, `API REQUEST BODY`, `API RESPONSE`,
+`API RESPONSE BODY`, requestBody/responseBody, headers JSON e payload JSON
+contíguo, inclusive em múltiplas linhas com limite de 1 MiB. Os padrões podem
+ser personalizados pelo parâmetro `logPatterns` de FlowBuilder/parseLogLine.
+Chamadas correlacionadas recebem `CODE_AND_LOG`; chamadas apenas nos logs
+recebem `LOG`, incluindo integrações sem Feign.
 
-A prioridade do response body é:
+O contrato interno usa exclusivamente `requestBody` e `responseBody`, sem alias
+`body`. Uma resposta seguramente correlacionada recebe `LOG / HIGH`. Sem body
+capturado, `responseBody` permanece ausente, `EMPTY / REVIEW_REQUIRED`; o fluxo
+não preenche respostas com DTOs ou exemplos. Apenas o contrato EasyPerf usa
+`response.body`, preenchido a partir de `ExternalCall.responseBody`. O `{}`
+no template sem resposta é um placeholder para revisão, não uma captura.
 
-1. Body capturado no log: `LOG / HIGH`.
-2. Exemplo de resposta OpenAPI/Swagger local (JSON/YAML, referências locais):
-   `OPENAPI / HIGH` ou `MEDIUM` quando o status não foi capturado.
-3. Mock/fixture que identifica método/path e resposta: `EXISTING_MOCK / HIGH`
-   ou `MEDIUM` conforme a evidência de status. Aceita WireMock, contrato EasyPerf
-   e fixtures com method/path/responseBody.
-4. DTO de retorno identificado: campos com valores null, `DTO / REVIEW_REQUIRED`.
-5. Sem evidência: `{}`, `EMPTY / REVIEW_REQUIRED`.
+Ocorrências são agrupadas por método + path normalizado. Comportamentos
+equivalentes produzem um arquivo e `collapseDuplicates=true`. Diferenças em
+requests, respostas, status ou host ficam em `behaviors`, com `occurrences`,
+`distinctBehaviors` e `VIRTUALIZATION_CONFLICT / REVIEW_REQUIRED`. Nenhum arquivo
+é gerado automaticamente para um grupo conflitante. A saída informa contagens,
+origens, bodies capturados/ausentes e conflitos. `npm run generate -- --debug`
+explica descoberta, correlação, descarte e duplicação sem imprimir payloads.
 
 Não há valores de negócio sintetizados. Referências externas OpenAPI não são
 consultadas. Sem status capturado, o template usa 200 e o FlowContext registra

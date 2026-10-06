@@ -7,4 +7,8 @@ export interface FlowContext {
   entrypoint: Entrypoint;
   externalCalls: ExternalCall[];
   traceId?: string;
+  runtimeAnalysis?: {
+    interactionsFound: number; uniqueExternalEndpoints: number; duplicateOccurrencesCollapsed: number;
+    responseBodiesCaptured: number; responseBodiesMissing: number;
+  };
 }

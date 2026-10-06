@@ -12,6 +12,7 @@ interface GenerateOptions {
   logs?: string;
   traceId?: string;
   endpoint?: string;
+  debug?: boolean;
 }
 
 export function registerGenerateCommand(program: Command): void {
@@ -23,8 +24,9 @@ export function registerGenerateCommand(program: Command): void {
     .option('--logs <path>', 'Path to a TXT or LOG file')
     .option('--trace-id <id>', 'Analyze only the selected trace in the log')
     .option('--endpoint <method-path>', 'Select an endpoint when logs are ambiguous, e.g. "POST /items"')
+    .option('--debug', 'Explain HTTP discovery and correlation without displaying payloads')
     .action(async (options: GenerateOptions, command: Command) => {
-      const interactive = Object.keys(options).length === 0;
+      const interactive = Object.keys(options).every((key) => key === 'debug');
       if (!interactive) {
         for (const name of ['application', 'repository', 'flow'] as const) {
           if (!options[name]?.trim()) command.error(`error: required option '--${name} <${name === 'repository' ? 'path' : 'name'}>' not specified`, { code: 'commander.missingMandatoryOptionValue' });
@@ -35,7 +37,7 @@ export function registerGenerateCommand(program: Command): void {
         if (interactive) {
           const input = await promptGenerate();
           stage = 'generation';
-          await generateWorkflow({ application: input.application, flow: input.flow, entrypoint: input.entrypoint, repository: input.analysis, logPath: input.logs, traceId: input.traceId });
+          await generateWorkflow({ application: input.application, flow: input.flow, entrypoint: input.entrypoint, repository: input.analysis, logPath: input.logs, traceId: input.traceId, debug: options.debug });
           return;
         }
         const validRepository = await validateRepositoryPath(options.repository!);
@@ -51,7 +53,7 @@ export function registerGenerateCommand(program: Command): void {
           const warning = formatEndpointWarning(analysis, entrypoint);
           if (warning) console.warn(warning);
           stage = 'generation';
-          await generateWorkflow({ application: options.application!, flow: options.flow!, entrypoint, repository: analysis, logPath: options.logs, traceId: options.traceId });
+          await generateWorkflow({ application: options.application!, flow: options.flow!, entrypoint, repository: analysis, logPath: options.logs, traceId: options.traceId, debug: options.debug });
         } else {
           // Preserve the previous repository-only invocation.
           console.log(sanitizeSensitiveData([

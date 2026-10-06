@@ -1,6 +1,7 @@
 export interface TraceIdentifiers {
   traceId?: string;
   correlationId?: string;
+  spanId?: string;
 }
 
 function identifier(line: string, key: string): string | undefined {
@@ -11,6 +12,8 @@ export function extractTraceIdentifiers(line: string): TraceIdentifiers {
   return {
     traceId: identifier(line, 'trace[-_]?id|x-b3-traceid')
       ?? /\btraceparent["']?\s*[:=]\s*["']?[\da-f]{2}-([\da-f]{32})-[\da-f]{16}-[\da-f]{2}\b/i.exec(line)?.[1],
+    spanId: identifier(line, 'span[-_]?id|x-b3-spanid')
+      ?? /\btraceparent["']?\s*[:=]\s*["']?[\da-f]{2}-[\da-f]{32}-([\da-f]{16})-[\da-f]{2}\b/i.exec(line)?.[1],
     correlationId: identifier(line, '(?:x-)?correlation[-_]?id'),
   };
 }

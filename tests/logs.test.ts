@@ -73,7 +73,7 @@ describe('trace extractor', () => {
     ['X-B3-TraceId: abc123', 'abc123', undefined],
     ['traceparent=00-0123456789abcdef0123456789abcdef-0123456789abcdef-01', '0123456789abcdef0123456789abcdef', undefined],
   ])('extracts identifiers from %s', (line, traceId, correlationId) => {
-    expect(extractTraceIdentifiers(line)).toEqual({ traceId, correlationId });
+    expect(extractTraceIdentifiers(line)).toEqual({ traceId, correlationId, spanId: line.startsWith('traceparent=') ? '0123456789abcdef' : undefined });
   });
   it('does not guess identifiers from ordinary messages', () => {
     expect(extractTraceIdentifiers('message mentions trace-123')).toEqual({ traceId: undefined, correlationId: undefined });

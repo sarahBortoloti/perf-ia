@@ -46,11 +46,12 @@ export interface SkippedJavaFile {
 }
 
 export interface JavaInvocation { receiver?: string; method: string }
-export interface JavaMethod { name: string; returnType: string; parameterTypes?: string[]; invocations: JavaInvocation[] }
+export interface JavaMethod { name: string; returnType: string; parameterTypes?: string[]; invocations: JavaInvocation[]; tokens?: string[] }
 export interface JavaType {
   name: string;
   packageName: string;
   filePath: string;
   fields: Record<string, string>;
+  fieldValues?: Record<string, string>;
   methods: JavaMethod[];
 }

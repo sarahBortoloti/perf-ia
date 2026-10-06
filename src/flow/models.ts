@@ -3,7 +3,7 @@ export type BodySource = 'LOG' | 'OPENAPI' | 'EXISTING_MOCK' | 'DTO' | 'EMPTY';
 export type Confidence = 'HIGH' | 'MEDIUM' | 'REVIEW_REQUIRED';
 export interface Entrypoint { method: string; path: string }
 export interface BodyEvidence {
-  body: unknown;
+  responseBody?: unknown;
   bodySource: BodySource;
   confidence: Confidence;
   evidence?: string;

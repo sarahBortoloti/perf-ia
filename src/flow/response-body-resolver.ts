@@ -48,7 +48,7 @@ export class ResponseBodyResolver {
   }
 
   resolve(call: ExternalCall): BodyEvidence {
-    if (call.responseBody !== undefined) return { body: sanitizeValue(call.responseBody), bodySource: 'LOG', confidence: 'HIGH' };
+    if (call.responseBody !== undefined) return { responseBody: sanitizeValue(call.responseBody), bodySource: 'LOG', confidence: 'HIGH' };
     for (const document of this.documents) {
       if (!document.data.openapi && !document.data.swagger) continue;
       for (const [path, operations] of Object.entries(object(document.data.paths))) {
@@ -62,7 +62,7 @@ export class ResponseBodyResolver {
         const content = object(object(response.content)['application/json']);
         const example = firstDefined(content.example, Object.values(object(content.examples)).map((item) => dereference(item, document.data).value).find((item) => item !== undefined),
           dereference(content.schema, document.data).example, object(response.examples)['application/json']);
-        if (example !== undefined) return { body: sanitizeValue(example), bodySource: 'OPENAPI', confidence: call.status === undefined ? 'MEDIUM' : 'HIGH', evidence: document.path };
+        if (example !== undefined) return { responseBody: sanitizeValue(example), bodySource: 'OPENAPI', confidence: call.status === undefined ? 'MEDIUM' : 'HIGH', evidence: document.path };
       }
     }
     for (const document of this.documents) {
@@ -76,14 +76,14 @@ export class ResponseBodyResolver {
       if (call.status !== undefined && status !== undefined && status !== call.status) continue;
       let body = firstDefined(response.jsonBody, response.body, document.data.responseBody);
       if (typeof body === 'string') { try { body = JSON.parse(body); } catch { /* A literal text response is evidence too. */ } }
-      if (body !== undefined) return { body: sanitizeValue(body), bodySource: 'EXISTING_MOCK', confidence: status === call.status && status !== undefined ? 'HIGH' : 'MEDIUM', evidence: document.path };
+      if (body !== undefined) return { responseBody: sanitizeValue(body), bodySource: 'EXISTING_MOCK', confidence: status === call.status && status !== undefined ? 'HIGH' : 'MEDIUM', evidence: document.path };
     }
     // DTOs describe fields, never business values: unknown scalar values become null.
     const typeName = call.returnType?.replace(/^(?:ResponseEntity|Optional)<(.+)>$/, '$1');
     const candidates = (this.repository.javaTypes ?? []).filter((type) => type.name === typeName || `${type.packageName}.${type.name}` === typeName);
     if (candidates.length === 1 && Object.keys(candidates[0].fields).length) {
-      return { body: sanitizeValue(Object.fromEntries(Object.keys(candidates[0].fields).map((field) => [field, null]))), bodySource: 'DTO', confidence: 'REVIEW_REQUIRED', evidence: candidates[0].filePath };
+      return { responseBody: sanitizeValue(Object.fromEntries(Object.keys(candidates[0].fields).map((field) => [field, null]))), bodySource: 'DTO', confidence: 'REVIEW_REQUIRED', evidence: candidates[0].filePath };
     }
-    return { body: {}, bodySource: 'EMPTY', confidence: 'REVIEW_REQUIRED' };
+    return { bodySource: 'EMPTY', confidence: 'REVIEW_REQUIRED' };
   }
 }

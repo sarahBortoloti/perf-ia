@@ -1,8 +1,8 @@
 import { sanitizeValue } from '../security/sensitive-data-sanitizer.js';
 
 /** Parse a single balanced JSON value after a log field without retaining raw data. */
-function jsonField(line: string, field: string): unknown {
-  const match = new RegExp(`\\b${field}["']?\\s*[:=]\\s*`, 'i').exec(line);
+export function jsonField(line: string, field: string): unknown {
+  const match = new RegExp(`\\b${field}["']?\\s*(?:[:=]\\s*|(?=[{\\["\\d]))`, 'i').exec(line);
   if (!match) return undefined;
   const remaining = line.slice(match.index + match[0].length).trim();
   const first = remaining[0];
@@ -32,13 +32,18 @@ function jsonField(line: string, field: string): unknown {
   return undefined;
 }
 
-export function extractResponse(line: string): { responseBody?: unknown; responseHeaders?: Record<string, unknown>; payload?: unknown } {
-  const responseBody = jsonField(line, 'response[-_]?body');
-  const headers = jsonField(line, 'response[-_]?headers');
+export function extractResponse(line: string): { requestBody?: unknown; requestHeaders?: Record<string, unknown>; responseBody?: unknown; responseHeaders?: Record<string, unknown>; payload?: unknown } {
+  const responseBody = jsonField(line, 'response[-_ ]?body');
+  const requestBody = jsonField(line, 'request[-_ ]?body');
+  const headers = jsonField(line, 'response[-_ ]?headers');
+  const requestHeaders = jsonField(line, 'request[-_ ]?headers');
   let payload: unknown;
   // Feign FULL logging may emit a JSON body as a separate line.
   if (/^\s*[[{]/.test(line)) {
     try { payload = sanitizeValue(JSON.parse(line)); } catch { /* Not a standalone JSON payload. */ }
   }
-  return { responseBody, responseHeaders: headers && typeof headers === 'object' && !Array.isArray(headers) ? headers as Record<string, unknown> : undefined, payload };
+  function record(value: unknown): Record<string, unknown> | undefined {
+    return value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value)) : undefined;
+  }
+  return { requestBody, requestHeaders: record(requestHeaders), responseBody, responseHeaders: record(headers), payload };
 }

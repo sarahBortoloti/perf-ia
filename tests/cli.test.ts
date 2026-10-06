@@ -69,7 +69,7 @@ describe('CLI', () => {
       logs: './examples/logs/aceite.log',
     });
     expect(analyzer).toHaveBeenCalledExactlyOnceWith('./examples/spring-app');
-    expect(logAnalyzer).toHaveBeenCalledExactlyOnceWith('./examples/logs/aceite.log', traceId, expect.any(Function));
+    expect(logAnalyzer).toHaveBeenCalledExactlyOnceWith('./examples/logs/aceite.log', traceId, expect.any(Function), undefined);
     const report = output.mock.calls.flat().join('\n');
     for (const text of ['Log analyzed', 'Lines processed: 9', 'Relevant lines: 7', 'Trace IDs found: 1', 'HTTP calls found: 3', 'Context reduction: 22.22%', '2 virtualization files generated.']) expect(report).toContain(text);
     expect(output.mock.calls.flat().join('\n')).not.toContain('fictional-demo-token');

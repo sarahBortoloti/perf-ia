@@ -6,9 +6,10 @@ import { sanitizeValue } from '../security/sensitive-data-sanitizer.js';
 import { safeName } from '../shared/safe-name.js';
 import { createVirtualizationTemplate } from './virtualization-template.js';
 import { validateVirtualization } from './virtualization-validator.js';
+import { groupInteractions } from '../flow/interaction-groups.js';
 
 export interface GeneratedFile { fileName: string; confidence: Confidence }
-export interface GenerationResult { directory: string; files: GeneratedFile[]; errors: string[] }
+export interface GenerationResult { directory: string; files: GeneratedFile[]; errors: string[]; warnings: string[] }
 
 export class VirtualizationGenerator {
   async generate(context: FlowContext, outputRoot = 'output'): Promise<GenerationResult> {
@@ -23,8 +24,10 @@ export class VirtualizationGenerator {
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     }
     await mkdir(directory, { recursive: true });
-    const result: GenerationResult = { directory, files: [], errors: [] };
+    safe.externalCalls = groupInteractions(safe.externalCalls);
+    const result: GenerationResult = { directory, files: [], errors: [], warnings: [] };
     for (const call of safe.externalCalls) {
+      if (call.conflict) { result.warnings.push(`VIRTUALIZATION_CONFLICT: ${call.method} ${call.path}; ${call.occurrences} occurrences, ${call.distinctBehaviors} distinct behaviors. No response selected automatically.`); continue; }
       const template = createVirtualizationTemplate(call);
       try { validateVirtualization(template); }
       catch (error) { result.errors.push(`Call ${call.order}: ${error instanceof Error ? error.message : String(error)}`); continue; }

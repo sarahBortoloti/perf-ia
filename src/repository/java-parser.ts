@@ -115,7 +115,7 @@ export function parseJavaSource(source: string, filePath: string): { controllers
         const feign = pending.find((a) => a.name === 'FeignClient');
         const prefix = feign?.attributes.path?.[0] ?? '';
         const found: Endpoint[] = [];
-        const structure: JavaType = { name, packageName, filePath, fields: {}, methods: [] };
+        const structure: JavaType = { name, packageName, filePath, fields: {}, fieldValues: {}, methods: [] };
         let memberStart = body + 1;
         let methodAnnotations: JavaAnnotation[] = [];
         for (let j = body + 1; j < bodyEnd;) {
@@ -135,8 +135,10 @@ export function parseJavaSource(source: string, filePath: string): { controllers
             let next = endParameters + 1;
             while (next < bodyEnd && !['{', ';', '='].includes(tokens[next])) next++;
             const invocations: JavaInvocation[] = [];
+            let methodTokens: string[] | undefined;
             if (tokens[next] === '{') {
               const endMethod = closing(next);
+              methodTokens = tokens.slice(next + 1, endMethod);
               for (let k = next + 1; k < endMethod; k++) {
                 if (tokens[k + 1] === '(' && /^[A-Za-z_$][\w$]*$/.test(tokens[k])) {
                   if (tokens[k - 1] === '.') invocations.push({ receiver: tokens[k - 2], method: tokens[k] });
@@ -145,7 +147,7 @@ export function parseJavaSource(source: string, filePath: string): { controllers
               }
               next = endMethod + 1;
             } else if (tokens[next] === ';') next++;
-            if (methodName !== name && signature) structure.methods.push({ name: methodName, returnType: signature, parameterTypes: parameterTypes(tokens, j + 1, endParameters, closing), invocations });
+            if (methodName !== name && signature) structure.methods.push({ name: methodName, returnType: signature, parameterTypes: parameterTypes(tokens, j + 1, endParameters, closing), invocations, tokens: methodTokens });
             methodAnnotations = []; j = next; memberStart = j; continue;
           }
           if (tokens[j] === '{') { methodAnnotations = []; j = closing(j) + 1; memberStart = j; continue; }
@@ -153,6 +155,11 @@ export function parseJavaSource(source: string, filePath: string): { controllers
             const declaration = tokens.slice(memberStart, j).filter((t) => !['public', 'private', 'protected', 'static', 'final', 'volatile', 'transient'].includes(t));
             const field = declaration.at(-1);
             if (field && declaration.length > 1 && /^[A-Za-z_$][\w$]*$/.test(field)) structure.fields[field] = declaration.slice(0, -1).join('');
+            if (field && structure.fieldValues) {
+              const configured = methodAnnotations.find((a) => a.name === 'Value')?.attributes.value?.[0];
+              const literal = tokens[j] === '=' && tokens[j + 1]?.startsWith('"') ? tokens[j + 1].slice(1, -1) : undefined;
+              if (configured ?? literal) structure.fieldValues[field] = configured ?? literal ?? '';
+            }
             methodAnnotations = []; memberStart = j + 1;
           }
           j++;

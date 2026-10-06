@@ -7,6 +7,6 @@ export interface VirtualizationTemplate {
 export function createVirtualizationTemplate(call: ExternalCall): VirtualizationTemplate {
   return sanitizeValue({ response: {
     metodo: call.method ?? '', path: call.path ?? '', status: call.status ?? 200,
-    header: call.responseHeaders ?? { 'Content-Type': 'application/json' }, body: call.body,
+    header: call.responseHeaders ?? { 'Content-Type': 'application/json' }, body: call.responseBody === undefined ? {} : call.responseBody,
   } }) as VirtualizationTemplate;
 }

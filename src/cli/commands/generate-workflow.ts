@@ -35,9 +35,9 @@ export async function selectArgumentEntrypoint(repository: RepositoryAnalysis, l
 
 export async function generateWorkflow(options: {
   application: string; flow: string; entrypoint: Entrypoint; repository: RepositoryAnalysis;
-  logPath: string; traceId?: string; outputRoot?: string;
+  logPath: string; traceId?: string; outputRoot?: string; debug?: boolean;
 }): Promise<void> {
-  const { context, logs } = await new FlowBuilder().build(options);
+  const { context, logs, diagnostics } = await new FlowBuilder().build(options);
   const generated = await new VirtualizationGenerator().generate(context, options.outputRoot);
   const lines = [
     'PERF AI', '────────────────────────────', '',
@@ -48,6 +48,19 @@ export async function generateWorkflow(options: {
     ...generated.files.map((file) => `${file.confidence === 'REVIEW_REQUIRED' ? '⚠' : '✓'} ${file.fileName}  ${file.confidence}`),
     ...generated.errors.map((error) => `✗ ${error}`), '', `${generated.files.length} virtualization files generated.`, '', 'Output:', generated.directory,
   ];
+  const metrics = context.runtimeAnalysis;
+  if (metrics) lines.push('', 'Runtime HTTP analysis', `✓ ${metrics.interactionsFound} HTTP interactions found`, `✓ ${metrics.uniqueExternalEndpoints} unique external endpoints`,
+    `✓ ${metrics.duplicateOccurrencesCollapsed} duplicate occurrences collapsed`, '', 'Sources:',
+    ...(['CODE_AND_LOG', 'LOG', 'CODE'] as const).map((source) => `${source}  ${context.externalCalls.filter((call) => call.source === source).length}`),
+    '', 'Response bodies:', `✓ ${metrics.responseBodiesCaptured} captured from logs`, `⚠ ${metrics.responseBodiesMissing} missing`);
+  for (const call of context.externalCalls) {
+    lines.push('', `Integration: ${call.client ?? 'unknown'}`, `Method: ${call.method ?? 'unknown'}`, `Path: ${call.path ?? 'unknown'}`, `Source: ${call.source}`,
+      `Request body: ${call.requestBody === undefined ? 'missing' : 'captured'}`, `Response: ${call.status ?? 'missing'}`,
+      `Response body: ${call.responseBody === undefined ? call.conflict ? 'multiple behaviors; review required' : 'missing' : 'captured'}`, `Confidence: ${call.confidence}`);
+    if (call.conflict) lines.push(`⚠ VIRTUALIZATION_CONFLICT: ${call.occurrences} occurrences, ${call.distinctBehaviors} distinct behaviors`);
+  }
+  lines.push(...generated.warnings.map((warning) => `⚠ ${warning}`));
+  if (options.debug) lines.push('', 'HTTP debug (payloads omitted)', ...diagnostics);
   if (generated.files.some((file) => file.confidence === 'REVIEW_REQUIRED')) lines.push('', 'Files marked REVIEW_REQUIRED must be reviewed before importing into EasyPerf.');
   console.log(sanitizeSensitiveData(lines.join('\n')));
   if (generated.errors.length) throw new Error('Some virtualizations failed validation; see errors above.');
