@@ -30,6 +30,7 @@ export class FlowBuilder {
       if (entryTraces.size && (line.traceId && !entryTraces.has(line.traceId) || !line.traceId && line.timestamp)) { runtime.resetContinuation(); return; }
       runtime.consume(line);
     }, options.logPatterns);
+    runtime.setLogAnalysis(logs);
     const calls = runtime.finish();
     const used = new Set<ExternalCall>();
     for (const call of calls) {
@@ -63,8 +64,12 @@ export class FlowBuilder {
       if (call.collapseDuplicates) runtime.diagnostics.push(`Duplicate occurrences collapsed: ${call.method} ${call.path} (${call.occurrences})`);
       if (call.conflict) runtime.diagnostics.push(`REVIEW_REQUIRED / VIRTUALIZATION_CONFLICT: ${call.method} ${call.path} (${call.distinctBehaviors} behaviors)`);
     }
+    const httpAnalysis = runtime.debugMetrics;
+    httpAnalysis.uniqueExternalEndpoints = new Set(calls.filter((call) => call.method && call.path).map((call) => `${call.method} ${call.path}`)).size;
+    httpAnalysis.duplicatesCollapsed = externalCalls.filter((call) => call.source !== 'CODE').reduce((total, call) => total + Math.max(0, (call.occurrences ?? 1) - (call.distinctBehaviors ?? 1)), 0);
+    httpAnalysis.conflictingBehaviors = externalCalls.filter((call) => call.conflict).length;
     const context: FlowContext = { application: options.application, flow: options.flow, entrypoint: options.entrypoint,
-      traceId: options.traceId, externalCalls, httpAnalysis: runtime.debugMetrics, runtimeAnalysis: {
+      traceId: options.traceId, externalCalls, httpAnalysis, runtimeAnalysis: {
         interactionsFound: calls.length, uniqueExternalEndpoints: new Set(calls.filter((call) => call.method && call.path).map((call) => `${call.method} ${call.path}`)).size,
         duplicateOccurrencesCollapsed: externalCalls.filter((call) => call.source !== 'CODE').reduce((total, call) => total + (call.occurrences ?? 1) - (call.distinctBehaviors ?? 1), 0),
         responseBodiesCaptured: calls.filter((call) => call.responseBody !== undefined).length,

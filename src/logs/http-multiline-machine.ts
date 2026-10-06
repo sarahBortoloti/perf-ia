@@ -2,6 +2,7 @@ import type { ParsedLogLine } from './log-parser.js';
 import type { ExternalCall, HttpAttempt } from '../flow/external-call.js';
 import { sanitizeSensitiveData, sanitizeValue } from '../security/sensitive-data-sanitizer.js';
 import { normalizedPath } from '../flow/interaction-groups.js';
+import { classifyLogEvent, type LogEvent, type HttpReadingPhase } from './log-event.js';
 
 type State = 'IDLE' | 'REQUEST_HEADERS' | 'REQUEST_BODY' | 'RESPONSE_HEADERS' | 'RESPONSE_BODY' | 'ERROR';
 interface Block {
@@ -9,10 +10,12 @@ interface Block {
   body: string; overflow: boolean; retry: boolean; complete: boolean;
 }
 export interface HttpDebugMetrics {
-  formats: string[]; httpBlocksDetected: number; requestsDetected: number; responsesDetected: number;
+  formats: string[]; linesRead: number; jsonLinesParsed: number; textLinesParsed: number; httpEventCandidates: number;
+  httpBlocksDetected: number; requestsDetected: number; responsesDetected: number;
   errorsDetected: number; retriesDetected: number; interactionsReconstructed: number;
   successfulInteractions: number; failedOnlyInteractions: number; requestBodiesCaptured: number;
-  responseBodiesCaptured: number; uncorrelatedResponseBodies: number;
+  responseBodiesCaptured: number; uncorrelatedRequests: number; uncorrelatedResponses: number; uncorrelatedResponseBodies: number;
+  uniqueExternalEndpoints: number; duplicatesCollapsed: number; conflictingBehaviors: number;
 }
 
 /** Each block has its own state, so interleaved threads/spans cannot share a body buffer. */
@@ -25,10 +28,15 @@ export class HttpMultilineMachine {
   private orphan?: { state: State; hasBody: boolean };
 
   private matches(block: Block, line: ParsedLogLine): boolean {
-    for (const key of ['traceId', 'spanId', 'requestId', 'correlationId'] as const) if (line[key] && block.call[key] !== line[key]) return false;
-    if (line.loggerName && block.logger !== line.loggerName) return false;
-    if (line.thread && block.thread !== line.thread) return false;
-    if (line.clientName && block.call.client !== line.clientName) return false;
+    if (line.traceId && line.spanId) return block.call.traceId === line.traceId && block.call.spanId === line.spanId;
+    if (line.requestId) return block.call.requestId === line.requestId;
+    if (line.correlationId) return block.call.correlationId === line.correlationId;
+    if (line.clientName || line.loggerName) {
+      const identityMatches = (!line.clientName || block.call.client === line.clientName)
+        && (!line.loggerName || block.logger === line.loggerName);
+      return identityMatches && (!line.thread || !block.thread || block.thread === line.thread);
+    }
+    if (line.thread) return block.thread === line.thread;
     return true;
   }
   private review(block: Block, reason: string): void {
@@ -54,15 +62,20 @@ export class HttpMultilineMachine {
     }
     block.body = ''; block.overflow = false;
   }
-  consume(line: ParsedLogLine): boolean {
+  consume(input: ParsedLogLine | LogEvent): boolean {
+    const original = 'type' in input ? input : undefined;
+    const line = original?.line ?? input as ParsedLogLine;
+    const active = this.blocks.find((block) => !block.complete && this.matches(block, line));
+    const phase = active && ['REQUEST_HEADERS', 'REQUEST_BODY', 'RESPONSE_HEADERS', 'RESPONSE_BODY'].includes(active.state) ? active.state as HttpReadingPhase : undefined;
+    const event = original?.type === 'OTHER' && phase ? classifyLogEvent(line, phase) : original ?? classifyLogEvent(line, phase);
     const text = line.text.trim().replace(/^\[[^\]]+\]\s*/, '');
     const start = /--->\s+(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+(https?:\/\/\S+)\s+HTTP\/\d(?:\.\d)?/i.exec(text);
     const status = /<---\s+([1-5]\d{2})\b/.exec(text);
-    const error = /<---\s+ERROR\b/i.test(text);
-    const retry = /--->\s+RETRYING\b/i.test(text);
-    const requestEnd = /--->\s+END HTTP\b/i.test(text);
-    const responseEnd = /<---\s+END HTTP\b/i.test(text);
-    const errorEnd = /<---\s+END ERROR\b/i.test(text);
+    const error = event.type === 'ERROR';
+    const retry = event.type === 'RETRY';
+    const requestEnd = event.type === 'REQUEST_END';
+    const responseEnd = event.type === 'RESPONSE_END';
+    const errorEnd = event.type === 'ERROR_END';
     if (start) {
       const method = start[1].toUpperCase(); const url = sanitizeSensitiveData(start[2]);
       let path: string; try { path = normalizedPath(new URL(url).pathname); } catch { return false; }

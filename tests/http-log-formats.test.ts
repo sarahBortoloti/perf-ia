@@ -9,6 +9,9 @@ import { VirtualizationGenerator } from '../src/virtualization/virtualization-ge
 import { sanitizeSensitiveData, sanitizeValue } from '../src/security/sensitive-data-sanitizer.js';
 import { generateWorkflow } from '../src/cli/commands/generate-workflow.js';
 import { analyzeRepository } from '../src/repository/index.js';
+import { classifyHttpMarker, normalizeHttpMessage } from '../src/logs/log-event.js';
+import { groupInteractions } from '../src/flow/interaction-groups.js';
+import { FlowBuilder } from '../src/flow/flow-builder.js';
 
 const temporary: string[] = [];
 async function directory() { const root = await mkdtemp(join(tmpdir(), 'perf-ai-http-formats-')); temporary.push(root); return root; }
@@ -19,13 +22,20 @@ async function fixture(name: string, traceId?: string) {
   return { calls: parser.finish(), metrics: parser.debugMetrics, diagnostics: parser.diagnostics };
 }
 function envelope(message: string, fields: Record<string, unknown> = {}) {
-  return JSON.stringify({ message, loggerName: 'com.example.Client', timestamp: '2026-10-06T10:00:00Z', sequence: 10, threadName: 'worker', traceId: 't', ...fields });
+  return JSON.stringify({ message, loggerName: 'com.example.Client', level: 'INFO', timestamp: '2026-10-06T10:00:00Z', sequence: 10, threadName: 'worker', traceId: 't', ...fields });
 }
 function lines(messages: string[]) { const runtime = new HttpInteractionReconstructor(); messages.forEach((line) => runtime.consume(parseLogLine(line))); return { calls: runtime.finish(), metrics: runtime.debugMetrics, diagnostics: runtime.diagnostics }; }
 describe('NDJSON messages', () => {
+  it.each([
+    ['API REQUEST', 'REQUEST_START'], ['API REQUEST BODY', 'REQUEST_BODY'], ['API REQUEST BODYS', 'REQUEST_BODY'], ['REQUEST BODY', 'REQUEST_BODY'], ['HTTP REQUEST', 'REQUEST_START'],
+    ['API RESPONSE', 'RESPONSE_START'], ['API RESPONSE BODY', 'RESPONSE_BODY'], ['API RESPONSE BODYS', 'RESPONSE_BODY'], ['RESPONSE BODY', 'RESPONSE_BODY'], ['HTTP RESPONSE', 'RESPONSE_START'],
+  ] as const)('normalizes and classifies %s as %s', (message, type) => {
+    expect(classifyHttpMarker(`  ${message.toLowerCase().replaceAll(' ', ' . ')} : `)).toBe(type);
+    expect(normalizeHttpMessage(message)).toBe(message);
+  });
   it.each(['API RESPONSE BODY', 'API RESPONSE BODYS', 'api response bodys', 'RESPONSE BODY', 'API RESPONSE'])('decodes %s and envelope identifiers before HTTP interpretation', (marker) => {
     const line = parseLogLine(envelope(`${marker}: {"status":"UP","password":"fictional-password"}`, { spanId: 's', requestId: 'r', correlationId: 'c' }));
-    expect(line).toMatchObject({ format: 'JSON_LINES', loggerName: 'com.example.Client', timestamp: '2026-10-06T10:00:00Z', sequence: 10, thread: 'worker', traceId: 't', spanId: 's', requestId: 'r', correlationId: 'c', responseBody: { status: 'UP', password: '[REDACTED]' } });
+    expect(line).toMatchObject({ format: 'JSON_LINES', loggerName: 'com.example.Client', level: 'INFO', timestamp: '2026-10-06T10:00:00Z', sequence: 10, thread: 'worker', traceId: 't', spanId: 's', requestId: 'r', correlationId: 'c', responseBody: { status: 'UP', password: '[REDACTED]' } });
     expect(line.http.status).toBeUndefined(); expect(line.text).not.toContain('fictional-password');
   });
   it('parses mixed NDJSON API events and NDJSON-wrapped HTTP dumps', async () => {
@@ -133,6 +143,26 @@ describe('HTTP multiline state machine', () => {
     const { calls } = lines(['---> POST https://example.test/a HTTP/1.1', '', 'x'.repeat(1024 * 1024 + 1), '---> END HTTP', '<--- 200', '', '{"ok":true}', '<--- END HTTP']);
     expect(calls[0].requestBody).toBeUndefined(); expect(calls[0].confidence).toBe('REVIEW_REQUIRED'); expect(calls[0].reviewReasons?.join('\n')).toContain('1 MiB');
   });
+  it('collapses five equivalent endpoint occurrences into one behavior', () => {
+    const messages: string[] = [];
+    for (let index = 1; index <= 5; index++) messages.push(`traceId=t requestId=r${index} API REQUEST GET https://example.test/repeated`,
+      `traceId=t requestId=r${index} API RESPONSE status=200 responseBody={"ok":true}`);
+    const calls = groupInteractions(lines(messages).calls);
+    expect(calls).toHaveLength(1); expect(calls[0]).toMatchObject({ occurrences: 5, distinctBehaviors: 1, collapseDuplicates: true, responseBody: { ok: true } });
+  });
+  it('keeps two semantic responses as a virtualization conflict', () => {
+    const calls = groupInteractions(lines(['requestId=a API REQUEST GET https://example.test/conflict', 'requestId=a API RESPONSE status=200 responseBody={"value":"a"}',
+      'requestId=b API REQUEST GET https://example.test/conflict', 'requestId=b API RESPONSE status=200 responseBody={"value":"b"}']).calls);
+    expect(calls).toHaveLength(1); expect(calls[0]).toMatchObject({ occurrences: 2, distinctBehaviors: 2, conflict: 'VIRTUALIZATION_CONFLICT', confidence: 'REVIEW_REQUIRED' });
+  });
+  it('ignores Kafka records in a mixed JSON Lines and HTTP multiline stream', () => {
+    const events = [envelope('Kafka consumer received topic=fictional payload={"event":"ignored"}', { loggerName: 'org.example.KafkaConsumer' }),
+      envelope('API REQUEST method=GET URL=https://example.test/json', { requestId: 'json' }), envelope('API RESPONSE status=200 responseBody={"json":true}', { requestId: 'json' }),
+      '---> GET https://example.test/multiline HTTP/1.1', '---> END HTTP', '<--- 200', '', '{"multiline":true}', '<--- END HTTP'];
+    const result = lines(events);
+    expect(result.calls.map((call) => call.path)).toEqual(['/json', '/multiline']);
+    expect(JSON.stringify(result.calls)).not.toContain('Kafka');
+  });
 });
 describe('security and debug', () => {
   it.each(['api-key', 'assertion', 'Authorization', 'Proxy-Authorization', 'cookie', 'set-cookie', 'X-Signature', 'token', 'access_token', 'refresh_token'])('sanitizes %s in text and structured values', (key) => {
@@ -145,7 +175,41 @@ describe('security and debug', () => {
       entrypoint: { method: 'GET', path: '/products' }, logPath: 'examples/http-format-fixture/structured.log', outputRoot: root, debug: true });
     const output = log.mock.calls.flat().join('\n');
     expect(output).toContain('Log format: JSON_LINES + HTTP_MULTILINE');
-    for (const counter of ['HTTP blocks detected: 1', 'Requests detected: 2', 'Responses detected: 2', 'Errors detected: 0', 'Retries detected: 0', 'Interactions reconstructed: 2', 'Successful interactions: 2', 'Failed-only interactions: 0', 'Request bodies captured: 2', 'Response bodies captured: 2', 'Uncorrelated response bodies: 1']) expect(output).toContain(counter);
+    for (const counter of ['Lines read: 17', 'JSON lines parsed: 17', 'Text lines parsed: 0', 'HTTP event candidates: 17', 'Request starts: 2', 'Request bodies: 2', 'Response starts: 2', 'Response bodies: 2', 'Errors: 0', 'Retries: 0', 'Interactions reconstructed: 2', 'Successful interactions: 2', 'Failed interactions: 0', 'Uncorrelated requests: 0', 'Uncorrelated responses: 1', 'Unique external endpoints: 2', 'Duplicates collapsed: 0', 'Conflicting behaviors: 0']) expect(output).toContain(counter);
     for (const secret of ['fictional-api-key', 'fictional-response-token', 'fictional-signature', '123.456.789-00', '"code":"00"']) expect(output).not.toContain(secret);
+  });
+  it('warns when HTTP evidence cannot produce an interaction', async () => {
+    const root = await directory(); const file = join(root, 'unreconstructed.log');
+    await writeFile(file, 'API REQUEST BODY: {"value":"orphan"}\nAPI RESPONSE BODYS: {"status":"UP"}\n');
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await generateWorkflow({ application: 'fictional', flow: 'warning', repository: await analyzeRepository('examples/spring-app'),
+      entrypoint: { method: 'GET', path: '/products' }, logPath: file, outputRoot: root, debug: true });
+    expect(output.mock.calls.flat().join('\n')).toContain('HTTP evidence was found in the log, but no interaction could be reconstructed.');
+  });
+});
+
+describe('local external HTTP pipeline', () => {
+  it('runs repository → events → interaction → FlowContext → final EasyPerf JSON', async () => {
+    const root = await directory();
+    await writeFile(join(root, 'JourneyController.java'), '@RestController class JourneyController { JourneyService service; @PostMapping("/journey") String run() { return service.run(); } }');
+    await writeFile(join(root, 'JourneyService.java'), '@Service class JourneyService { ProposalAdapter adapter; String run() { return adapter.send(); } }');
+    await writeFile(join(root, 'ProposalAdapter.java'), 'class ProposalAdapter { RestTemplate http; @Value("${proposal.url}") String url; String send() { return http.postForObject(url, "fictional", String.class); } }');
+    await writeFile(join(root, 'application.properties'), 'proposal.url=https://external.example.test/proposal\n');
+    const logPath = join(root, 'journey.log');
+    const external = { traceId: 'e2e', spanId: 'external', loggerName: 'ProposalAdapter' };
+    await writeFile(logPath, ['traceId=e2e HTTP POST /journey',
+      ...['---> POST https://external.example.test/proposal HTTP/1.1', 'Content-Type: application/json', '', '{"proposal":"fictional-123"}',
+        '---> END HTTP', '<--- 200', 'Content-Type: application/json', '', '{"code":"00","result":"SUCCESS"}', '<--- END HTTP']
+        .map((message) => envelope(message, external))].join('\n'));
+    const repository = await analyzeRepository(root);
+    const built = await new FlowBuilder().build({ application: 'journey', flow: 'accept', repository, entrypoint: { method: 'POST', path: '/journey' }, logPath, traceId: 'e2e' });
+    expect(built.context.externalCalls).toHaveLength(1);
+    expect(built.context.externalCalls[0]).toMatchObject({ source: 'CODE_AND_LOG', method: 'POST', path: '/proposal', requestBody: { proposal: 'fictional-123' }, status: 200,
+      responseBody: { code: '00', result: 'SUCCESS' }, confidence: 'HIGH' });
+    const generated = await new VirtualizationGenerator().generate(built.context, join(root, 'output'));
+    expect(generated.files).toHaveLength(1);
+    expect(JSON.parse(await readFile(join(generated.directory, generated.files[0].fileName), 'utf8'))).toEqual({ response: {
+      metodo: 'POST', path: '/proposal', status: 200, header: { 'Content-Type': 'application/json' }, body: { code: '00', result: 'SUCCESS' },
+    } });
   });
 });

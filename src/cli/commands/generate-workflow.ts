@@ -37,7 +37,10 @@ export async function generateWorkflow(options: {
   application: string; flow: string; entrypoint: Entrypoint; repository: RepositoryAnalysis;
   logPath: string; traceId?: string; outputRoot?: string; debug?: boolean;
 }): Promise<void> {
+  if (options.debug) console.log('[generate] starting log analysis');
+  if (options.debug) console.log('[generate] building FlowContext');
   const { context, logs, diagnostics } = await new FlowBuilder().build(options);
+  if (options.debug) console.log('[generate] generating virtualizations');
   const generated = await new VirtualizationGenerator().generate(context, options.outputRoot);
   const lines = [
     'PERF AI', '────────────────────────────', '',
@@ -60,15 +63,21 @@ export async function generateWorkflow(options: {
     if (call.conflict) lines.push(`⚠ VIRTUALIZATION_CONFLICT: ${call.occurrences} occurrences, ${call.distinctBehaviors} distinct behaviors`);
   }
   lines.push(...generated.warnings.map((warning) => `⚠ ${warning}`));
+  if (logs.httpEventCandidates > 0 && context.httpAnalysis?.interactionsReconstructed === 0) {
+    lines.push('', '⚠ HTTP evidence was found in the log, but no interaction could be reconstructed.');
+  }
   if (options.debug) {
     const http = context.httpAnalysis;
-    if (http) lines.push('', `Log format: ${http.formats.join(' + ') || 'TEXT'}`, `HTTP blocks detected: ${http.httpBlocksDetected}`,
-      `Requests detected: ${http.requestsDetected}`, `Responses detected: ${http.responsesDetected}`, `Errors detected: ${http.errorsDetected}`, `Retries detected: ${http.retriesDetected}`,
-      `Interactions reconstructed: ${http.interactionsReconstructed}`, `Successful interactions: ${http.successfulInteractions}`, `Failed-only interactions: ${http.failedOnlyInteractions}`,
-      `Request bodies captured: ${http.requestBodiesCaptured}`, `Response bodies captured: ${http.responseBodiesCaptured}`, `Uncorrelated response bodies: ${http.uncorrelatedResponseBodies}`);
+    if (http) lines.push('', 'Log analysis', '--------------------------------', `Lines read: ${http.linesRead}`, `JSON lines parsed: ${http.jsonLinesParsed}`, `Text lines parsed: ${http.textLinesParsed}`,
+      '', `HTTP event candidates: ${http.httpEventCandidates}`, '', `Request starts: ${http.requestsDetected}`, `Request bodies: ${http.requestBodiesCaptured}`,
+      `Response starts: ${http.responsesDetected}`, `Response bodies: ${http.responseBodiesCaptured}`, `Errors: ${http.errorsDetected}`, `Retries: ${http.retriesDetected}`,
+      '', `Interactions reconstructed: ${http.interactionsReconstructed}`, `Successful interactions: ${http.successfulInteractions}`, `Failed interactions: ${http.failedOnlyInteractions}`,
+      `Uncorrelated requests: ${http.uncorrelatedRequests}`, `Uncorrelated responses: ${http.uncorrelatedResponses}`, '', `Unique external endpoints: ${http.uniqueExternalEndpoints}`,
+      `Duplicates collapsed: ${http.duplicatesCollapsed}`, `Conflicting behaviors: ${http.conflictingBehaviors}`, '', `Log format: ${http.formats.join(' + ') || 'TEXT'}`);
     lines.push('', 'HTTP debug (payloads omitted)', ...diagnostics);
   }
   if (generated.files.some((file) => file.confidence === 'REVIEW_REQUIRED')) lines.push('', 'Files marked REVIEW_REQUIRED must be reviewed before importing into EasyPerf.');
   console.log(sanitizeSensitiveData(lines.join('\n')));
   if (generated.errors.length) throw new Error('Some virtualizations failed validation; see errors above.');
+  if (options.debug) console.log('[generate] completed');
 }

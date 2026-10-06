@@ -16,5 +16,5 @@ export function createProgram(): Command {
 }
 
 if (process.env.NODE_ENV !== 'test') {
-  void createProgram().parseAsync();
+  await createProgram().parseAsync();
 }

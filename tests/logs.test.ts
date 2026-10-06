@@ -149,7 +149,8 @@ describe('log parser and analysis', () => {
   });
 
   it('analyzes the fictional example with and without a trace filter', async () => {
-    const expected = { linesProcessed: 9, relevantLines: 7, traceIdsFound: 1, httpCallsFound: 3, externalHttpCallsFound: 2, contextReduction: 22.22 };
+    const expected = { linesProcessed: 9, relevantLines: 7, traceIdsFound: 1, httpCallsFound: 3, externalHttpCallsFound: 2, contextReduction: 22.22,
+      jsonLinesParsed: 0, textLinesParsed: 9, httpEventCandidates: 6 };
     expect(await analyzeLogs('examples/logs/aceite.log')).toEqual(expected);
     expect(await analyzeLogs('examples/logs/aceite.log', 'trace-123')).toEqual(expected);
   });
@@ -165,12 +166,14 @@ describe('log parser and analysis', () => {
       'RestTemplate GET https://remote.test/untagged',
       'irrelevant maintenance',
     ].join('\n'));
-    expect(await analyzeLogs(path, 'trace-123')).toEqual({ linesProcessed: 8, relevantLines: 3, traceIdsFound: 3, httpCallsFound: 1, externalHttpCallsFound: 1, contextReduction: 62.5 });
+    expect(await analyzeLogs(path, 'trace-123')).toEqual({ linesProcessed: 8, relevantLines: 3, traceIdsFound: 3, httpCallsFound: 1, externalHttpCallsFound: 1, contextReduction: 62.5,
+      jsonLinesParsed: 0, textLinesParsed: 8, httpEventCandidates: 1 });
     expect(await analyzeLogs(path, 'missing')).toMatchObject({ relevantLines: 0, httpCallsFound: 0, contextReduction: 100 });
     expect(await analyzeLogs(path)).toMatchObject({ relevantLines: 7, httpCallsFound: 3, externalHttpCallsFound: 3 });
   });
 
   it('handles empty input without invalid percentages', async () => {
-    expect(await analyzeLogs(await fixture(''))).toEqual({ linesProcessed: 0, relevantLines: 0, traceIdsFound: 0, httpCallsFound: 0, externalHttpCallsFound: 0, contextReduction: 0 });
+    expect(await analyzeLogs(await fixture(''))).toEqual({ linesProcessed: 0, relevantLines: 0, traceIdsFound: 0, httpCallsFound: 0, externalHttpCallsFound: 0, contextReduction: 0,
+      jsonLinesParsed: 0, textLinesParsed: 0, httpEventCandidates: 0 });
   });
 });

@@ -29,7 +29,10 @@ export function repositoryEndpoints(repository: RepositoryAnalysis): Entrypoint[
   return [...new Map(repository.controllers.flatMap((controller) => controller.endpoints)
     .map((endpoint) => [`${endpoint.httpMethod} ${endpoint.path}`, { method: endpoint.httpMethod, path: endpoint.path }])).values()];
 }
-export async function promptGenerate(): Promise<{
+export function normalizeOptionalTraceId(value: unknown): string | undefined {
+  return typeof value === 'string' ? value.trim() || undefined : undefined;
+}
+export async function promptGenerate(debug = false): Promise<{
   application: string; repository: string; flow: string; logs: string; traceId?: string;
   entrypoint: Entrypoint; analysis: RepositoryAnalysis;
 }> {
@@ -37,15 +40,19 @@ export async function promptGenerate(): Promise<{
   const repository = (await input({ message: 'Informe o caminho do repositório:', validate: validateRepositoryPath })).trim();
   const analysis = await analyzeRepository(repository);
   console.log(formatRepositoryDiagnostics(analysis));
+  if (debug) console.log('[generate] repository complete');
   const endpoints = repositoryEndpoints(analysis);
   if (!endpoints.length) throw new Error('Nenhum endpoint encontrado no repositório.');
   const entrypoint = await select<Entrypoint>({
     message: 'Qual endpoint deseja virtualizar?',
     choices: endpoints.map((endpoint) => ({ name: sanitizeSensitiveData(`${endpoint.method} ${endpoint.path}`), value: endpoint })),
   });
+  if (debug) console.log('[generate] endpoint selected');
   const warning = formatEndpointWarning(analysis, entrypoint);
   if (warning) console.warn(warning);
   const logs = (await input({ message: 'Informe o caminho do arquivo de logs (.txt ou .log):', validate: validateLogPath })).trim();
-  const traceId = (await input({ message: 'Possui Trace ID? (opcional)' })).trim() || undefined;
+  if (debug) console.log('[generate] log path received');
+  const traceId = normalizeOptionalTraceId(await input({ message: 'Possui Trace ID? (opcional)' }));
+  if (debug) console.log(`[generate] traceId: ${traceId ? 'provided' : 'not provided'}`);
   return { application, repository, flow: safeName(entrypoint.path), logs, traceId, entrypoint, analysis };
 }

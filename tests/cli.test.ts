@@ -15,11 +15,11 @@ afterEach(async () => {
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-async function isolateOutput(): Promise<void> {
+async function isolateOutput() {
   const root = await mkdtemp(join(tmpdir(), 'perf-ai-cli-'));
   temporary.push(root);
   const generate = VirtualizationGenerator.prototype.generate;
-  vi.spyOn(VirtualizationGenerator.prototype, 'generate').mockImplementation(function(this: VirtualizationGenerator, context) { return generate.call(this, context, root); });
+  return vi.spyOn(VirtualizationGenerator.prototype, 'generate').mockImplementation(function(this: VirtualizationGenerator, context) { return generate.call(this, context, root); });
 }
 
 const requiredArgs = ['generate', '--application', 'demo-api', '--repository', './examples/spring-app', '--flow', 'aceite'];
@@ -75,18 +75,46 @@ describe('CLI', () => {
     expect(output.mock.calls.flat().join('\n')).not.toContain('fictional-demo-token');
   });
 
-  it('starts interactive generation when invoked without options', async () => {
-    await isolateOutput();
+  it.each([
+    ['', undefined],
+    ['trace-test-123', 'trace-test-123'],
+  ] as const)('completes interactive generation with trace input %j', async (promptTraceId, expectedTraceId) => {
+    const generator = await isolateOutput();
     const analysis = await repository.analyzeRepository('examples/spring-app');
+    const logAnalyzer = vi.spyOn(logParser, 'analyzeLogs');
     const prompt = vi.spyOn(interactive, 'promptGenerate').mockResolvedValueOnce({
       application: 'demo-api', repository: './examples/spring-app', flow: 'products', logs: './examples/logs/aceite.log',
-      entrypoint: { method: 'GET', path: '/products' }, analysis,
+      traceId: promptTraceId, entrypoint: { method: 'GET', path: '/products' }, analysis,
     });
     const output = vi.spyOn(console, 'log').mockImplementation(() => {});
     const { program } = testProgram();
     await program.parseAsync(['generate'], { from: 'user' });
-    expect(prompt).toHaveBeenCalledOnce();
+    expect(prompt).toHaveBeenCalledExactlyOnceWith(false);
+    expect(logAnalyzer).toHaveBeenCalledExactlyOnceWith('./examples/logs/aceite.log', expectedTraceId, expect.any(Function), undefined);
+    expect(generator).toHaveBeenCalledOnce();
+    expect(generator.mock.calls[0][0]).toMatchObject({ application: 'demo-api', flow: 'products', traceId: expectedTraceId, externalCalls: expect.any(Array) });
     expect(output.mock.calls.flat().join('\n')).toContain('2 virtualization files generated.');
+  });
+
+  it('reports sanitized interactive progress in debug mode after an empty trace ID', async () => {
+    await isolateOutput();
+    const analysis = await repository.analyzeRepository('examples/spring-app');
+    vi.spyOn(interactive, 'promptGenerate').mockImplementationOnce(async (debug) => {
+      expect(debug).toBe(true);
+      console.log('[generate] repository complete');
+      console.log('[generate] endpoint selected');
+      console.log('[generate] log path received');
+      console.log('[generate] traceId: not provided');
+      return { application: 'demo-api', repository: './examples/spring-app', flow: 'products', logs: './examples/logs/aceite.log', traceId: undefined,
+        entrypoint: { method: 'GET', path: '/products' }, analysis };
+    });
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { program } = testProgram();
+    await program.parseAsync(['generate', '--debug'], { from: 'user' });
+    const report = output.mock.calls.flat().join('\n');
+    for (const message of ['repository complete', 'endpoint selected', 'log path received', 'traceId: not provided', 'starting log analysis', 'building FlowContext', 'generating virtualizations', 'completed']) {
+      expect(report).toContain(`[generate] ${message}`);
+    }
   });
 
   it('lists a malformed Java file and keeps the repository-only command successful', async () => {

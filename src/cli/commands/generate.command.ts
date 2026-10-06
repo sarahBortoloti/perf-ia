@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 import { analyzeRepository } from '../../repository/index.js';
 import { sanitizeSensitiveData } from '../../security/sensitive-data-sanitizer.js';
-import { promptGenerate, validateRepositoryPath, validateLogPath } from './interactive-generate.js';
+import { promptGenerate, validateRepositoryPath, validateLogPath, normalizeOptionalTraceId } from './interactive-generate.js';
 import { generateWorkflow, selectArgumentEntrypoint } from './generate-workflow.js';
 import { formatRepositoryDiagnostics, formatEndpointWarning } from '../../repository/repository-diagnostics.js';
 
@@ -35,9 +35,10 @@ export function registerGenerateCommand(program: Command): void {
       let stage: 'repository' | 'log' | 'generation' = 'repository';
       try {
         if (interactive) {
-          const input = await promptGenerate();
+          const input = await promptGenerate(Boolean(options.debug));
           stage = 'generation';
-          await generateWorkflow({ application: input.application, flow: input.flow, entrypoint: input.entrypoint, repository: input.analysis, logPath: input.logs, traceId: input.traceId, debug: options.debug });
+          const traceId = normalizeOptionalTraceId(input.traceId);
+          await generateWorkflow({ application: input.application, flow: input.flow, entrypoint: input.entrypoint, repository: input.analysis, logPath: input.logs, traceId, debug: options.debug });
           return;
         }
         const validRepository = await validateRepositoryPath(options.repository!);
@@ -49,11 +50,12 @@ export function registerGenerateCommand(program: Command): void {
           stage = 'log';
           const validLog = await validateLogPath(options.logs);
           if (validLog !== true) throw new Error(`Log file does not exist, cannot be read, or is invalid: ${validLog}`);
-          const entrypoint = await selectArgumentEntrypoint(analysis, options.logs, options.traceId, options.endpoint);
+          const traceId = normalizeOptionalTraceId(options.traceId);
+          const entrypoint = await selectArgumentEntrypoint(analysis, options.logs, traceId, options.endpoint);
           const warning = formatEndpointWarning(analysis, entrypoint);
           if (warning) console.warn(warning);
           stage = 'generation';
-          await generateWorkflow({ application: options.application!, flow: options.flow!, entrypoint, repository: analysis, logPath: options.logs, traceId: options.traceId, debug: options.debug });
+          await generateWorkflow({ application: options.application!, flow: options.flow!, entrypoint, repository: analysis, logPath: options.logs, traceId, debug: options.debug });
         } else {
           // Preserve the previous repository-only invocation.
           console.log(sanitizeSensitiveData([

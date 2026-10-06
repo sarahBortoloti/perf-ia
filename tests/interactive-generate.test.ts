@@ -1,7 +1,7 @@
 import { input, select } from '@inquirer/prompts';
 import * as fs from 'node:fs/promises';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { promptGenerate, validateRepositoryPath, validateLogPath, repositoryEndpoints } from '../src/cli/commands/interactive-generate.js';
+import { promptGenerate, validateRepositoryPath, validateLogPath, repositoryEndpoints, normalizeOptionalTraceId } from '../src/cli/commands/interactive-generate.js';
 import { selectArgumentEntrypoint } from '../src/cli/commands/generate-workflow.js';
 import { analyzeRepository } from '../src/repository/index.js';
 import { tmpdir } from 'node:os';
@@ -32,6 +32,11 @@ async function log(text: string): Promise<string> {
 }
 
 describe('interactive generation', () => {
+  it.each([
+    ['', undefined], ['   ', undefined], [undefined, undefined], [null, undefined], [' trace-test-123 ', 'trace-test-123'],
+  ])('normalizes optional trace input %j to %j', (input, expected) => {
+    expect(normalizeOptionalTraceId(input)).toBe(expected);
+  });
   it.each(['', 'trace-123'])('asks in order, selects a discovered endpoint and allows trace %s', async (trace) => {
     vi.mocked(input).mockResolvedValueOnce('demo-api').mockResolvedValueOnce('./examples/spring-app').mockResolvedValueOnce('./examples/logs/aceite.log').mockResolvedValueOnce(trace);
     vi.mocked(select).mockResolvedValueOnce({ method: 'GET', path: '/products' });

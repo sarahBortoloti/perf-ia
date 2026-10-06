@@ -3,11 +3,13 @@ import { readLogLines } from './log-reader.js';
 import { extractTraceIdentifiers, type TraceIdentifiers } from './trace-extractor.js';
 import { extractHttpCall, extractHttpDetails, type HttpCall } from './http-call-extractor.js';
 import { extractResponse } from './response-extractor.js';
+import { classifyHttpMarker, classifyLogEvent, isHttpEventCandidate } from './log-event.js';
 
 export interface ParsedLogLine extends TraceIdentifiers {
   text: string;
   format?: 'JSON_LINES';
   loggerName?: string;
+  level?: string;
   sequence?: number;
   timestamp?: string;
   http: HttpCall;
@@ -34,6 +36,9 @@ export interface LogAnalysis {
   httpCallsFound: number;
   externalHttpCallsFound: number;
   contextReduction: number;
+  jsonLinesParsed: number;
+  textLinesParsed: number;
+  httpEventCandidates: number;
 }
 
 export interface LogPatterns {
@@ -47,7 +52,7 @@ export function parseLogLine(input: string, patterns: LogPatterns = {}): ParsedL
     const fields = Object.fromEntries(Object.entries(envelope));
     const line = parseTextLine(envelope.message, patterns);
     const string = (key: string): string | undefined => typeof fields[key] === 'string' ? sanitizeSensitiveData(fields[key]) : undefined;
-    line.format = 'JSON_LINES'; line.loggerName = string('loggerName');
+    line.format = 'JSON_LINES'; line.loggerName = string('loggerName'); line.level = string('level');
     line.timestamp = string('timestamp') ?? line.timestamp;
     line.sequence = typeof fields.sequence === 'number' ? fields.sequence : undefined;
     line.thread = string('threadName') ?? line.thread;
@@ -73,14 +78,15 @@ function parseTextLine(input: string, patterns: LogPatterns = {}): ParsedLogLine
     ?? /\[([\w.$]*(?:Client|Gateway|Adapter))\]/.exec(metadata)?.[1];
   const thread = /\bthread["']?\s*[:=]\s*["']?([\w.-]+)/i.exec(text)?.[1] ?? /\[([\w-]*(?:exec|thread|pool)[\w-]*)\]/i.exec(text)?.[1];
   const matches = (pattern: RegExp): boolean => { pattern.lastIndex = 0; return pattern.test(text); };
-  const event = matches(patterns.responseBody ?? /\bresponse[-_ ]?bodys?\b/i) ? 'RESPONSE_BODY'
-    : matches(patterns.requestBody ?? /\brequest[-_ ]?body\b/i) ? 'REQUEST_BODY'
-    : matches(patterns.response ?? /\b(?:API[ _-]+RESPONSE|response)\b|<---/i) ? 'RESPONSE'
-    : matches(patterns.request ?? /\bAPI[ _-]+REQUEST\b|--->/i) ? 'REQUEST' : undefined;
+  const classified = classifyHttpMarker(text);
+  const event = matches(patterns.responseBody ?? /\bresponse[-_ .:-]*bodys?\b/i) || classified === 'RESPONSE_BODY' ? 'RESPONSE_BODY'
+    : matches(patterns.requestBody ?? /\brequest[-_ .:-]*bodys?\b/i) || classified === 'REQUEST_BODY' ? 'REQUEST_BODY'
+    : matches(patterns.response ?? /\b(?:API|HTTP)[ _.-]+RESPONSE\b|<---/i) || classified === 'RESPONSE_START' ? 'RESPONSE'
+    : matches(patterns.request ?? /\b(?:API|HTTP)[ _.-]+REQUEST\b|--->/i) || classified === 'REQUEST_START' ? 'REQUEST' : undefined;
   let bodyFragment: string | undefined;
-  const apiResponsePayload = /\bAPI[ _-]+RESPONSE\s*:\s*(?=[{["<])/i.test(text);
+  const apiResponsePayload = /\b(?:API|HTTP)[ _.-]+RESPONSE\s*:\s*(?=[{["<])/i.test(text);
   if (event === 'REQUEST_BODY' || event === 'RESPONSE_BODY' || apiResponsePayload) {
-    const marker = event === 'REQUEST_BODY' ? patterns.requestBody ?? /\brequest[-_ ]?body\b/i : apiResponsePayload ? /\bAPI[ _-]+RESPONSE\b/i : patterns.responseBody ?? /\bresponse[-_ ]?bodys?\b/i;
+    const marker = event === 'REQUEST_BODY' ? patterns.requestBody ?? /\brequest[-_ .:-]*bodys?\b/i : apiResponsePayload ? /\b(?:API|HTTP)[ _.-]+RESPONSE\b/i : patterns.responseBody ?? /\bresponse[-_ .:-]*bodys?\b/i;
     marker.lastIndex = 0;
     const match = marker.exec(text);
     const tail = match ? text.slice(match.index + match[0].length).replace(/^["']?\s*[:=-]?\s*/, '') : '';
@@ -100,7 +106,8 @@ function parseTextLine(input: string, patterns: LogPatterns = {}): ParsedLogLine
 
 /** Aggregate only counters and distinct trace IDs, never the file or its records. */
 export async function analyzeLogs(filePath: string, traceId?: string, onRelevantLine?: (line: ParsedLogLine) => void, patterns?: LogPatterns): Promise<LogAnalysis> {
-  const metrics: LogAnalysis = { linesProcessed: 0, relevantLines: 0, traceIdsFound: 0, httpCallsFound: 0, externalHttpCallsFound: 0, contextReduction: 0 };
+  const metrics: LogAnalysis = { linesProcessed: 0, relevantLines: 0, traceIdsFound: 0, httpCallsFound: 0, externalHttpCallsFound: 0, contextReduction: 0,
+    jsonLinesParsed: 0, textLinesParsed: 0, httpEventCandidates: 0 };
   const traces = new Set<string>();
   let selectedContinuation = false;
   let selectedHttpDump: boolean = false;
@@ -108,6 +115,7 @@ export async function analyzeLogs(filePath: string, traceId?: string, onRelevant
   for await (const rawLine of readLogLines(filePath)) {
     metrics.linesProcessed++;
     const line = parseLogLine(rawLine, patterns);
+    if (line.format === 'JSON_LINES') metrics.jsonLinesParsed++; else metrics.textLinesParsed++;
     if (line.traceId) traces.add(line.traceId);
     const continuation: boolean = !line.traceId && !line.timestamp && (selectedHttpDump || /^\s*(?:at\s|Caused by:|Suppressed:|\.\.\. \d+ more)/.test(line.text) || line.payload !== undefined || line.jsonFragment !== undefined || line.event !== undefined || /^\s*$|^\s*[\w-]+:\s*/.test(line.text));
     const scopedContinuation = dumpScopes.some((scope) => {
@@ -121,6 +129,8 @@ export async function analyzeLogs(filePath: string, traceId?: string, onRelevant
       if (selected) dumpScopes.push(line);
     }
     if (!selected) continue;
+    const event = classifyLogEvent(line);
+    if (isHttpEventCandidate(event) || selectedHttpDump) metrics.httpEventCandidates++;
     metrics.relevantLines++;
     onRelevantLine?.(line);
     if (/<---\s+END HTTP/i.test(line.text)) {
