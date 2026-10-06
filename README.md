@@ -88,6 +88,22 @@ requests, respostas, status ou host ficam em `behaviors`, com `occurrences`,
 origens, bodies capturados/ausentes e conflitos. `npm run generate -- --debug`
 explica descoberta, correlação, descarte e duplicação sem imprimir payloads.
 
+O parser também decodifica logs JSON Lines/NDJSON e analisa o campo `message`,
+preservando `loggerName`, `timestamp`, `sequence`, `threadName` e identificadores
+de correlação do envelope. Os marcadores aceitam `API RESPONSE BODY`,
+`API RESPONSE BODYS`, `API RESPONSE` e `RESPONSE BODY`, sem diferença entre
+maiúsculas e minúsculas.
+
+Dumps HTTP multiline são reconstruídos como blocos com headers e bodies separados:
+`---> METHOD URL HTTP/version` inicia a requisição, `---> END HTTP` a encerra,
+`<--- STATUS` inicia a resposta e `<--- END HTTP` a encerra. `ERROR`, `END ERROR`
+e `RETRYING` criam tentativas dentro da mesma interação. A última tentativa bem
+sucedida fornece a resposta utilizável; quando todas falham, o contexto registra
+`NO_SUCCESSFUL_RESPONSE` e nenhuma virtualização é produzida. Headers sensíveis
+são mascarados assim que entram na máquina de estados. No debug são exibidos
+somente formato e contadores de blocos, requests, responses, erros, retries,
+sucessos, falhas e bodies, sem conteúdo de payload.
+
 Não há valores de negócio sintetizados. Referências externas OpenAPI não são
 consultadas. Sem status capturado, o template usa 200 e o FlowContext registra
 explicitamente essa ausência em reviewReasons; o arquivo requer revisão.

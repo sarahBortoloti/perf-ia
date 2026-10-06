@@ -33,7 +33,7 @@ export function jsonField(line: string, field: string): unknown {
 }
 
 export function extractResponse(line: string): { requestBody?: unknown; requestHeaders?: Record<string, unknown>; responseBody?: unknown; responseHeaders?: Record<string, unknown>; payload?: unknown } {
-  const responseBody = jsonField(line, 'response[-_ ]?body');
+  const responseBody = jsonField(line, 'response[-_ ]?bodys?');
   const requestBody = jsonField(line, 'request[-_ ]?body');
   const headers = jsonField(line, 'response[-_ ]?headers');
   const requestHeaders = jsonField(line, 'request[-_ ]?headers');

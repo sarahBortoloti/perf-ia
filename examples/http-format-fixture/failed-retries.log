@@ -1,0 +1,15 @@
+---> POST https://example.test/login/sistema HTTP/1.1
+Content-Type: application/json
+
+{"username":"fictional-user","password":"fictional-password"}
+---> END HTTP
+<--- ERROR javax.net.ssl.SSLHandshakeException: fictional SSL error
+<--- END ERROR
+---> RETRYING
+---> POST https://example.test/login/sistema HTTP/1.1
+Content-Type: application/json
+
+{"username":"fictional-user","password":"fictional-password"}
+---> END HTTP
+<--- ERROR javax.net.ssl.SSLHandshakeException: fictional SSL error
+<--- END ERROR

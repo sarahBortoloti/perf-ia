@@ -6,6 +6,9 @@ import { extractResponse } from './response-extractor.js';
 
 export interface ParsedLogLine extends TraceIdentifiers {
   text: string;
+  format?: 'JSON_LINES';
+  loggerName?: string;
+  sequence?: number;
   timestamp?: string;
   http: HttpCall;
   httpCall?: HttpCall;
@@ -36,10 +39,28 @@ export interface LogAnalysis {
 export interface LogPatterns {
   request?: RegExp; requestBody?: RegExp; response?: RegExp; responseBody?: RegExp;
 }
+/** Decode NDJSON before interpreting message so escaped bodies become actual JSON. */
 export function parseLogLine(input: string, patterns: LogPatterns = {}): ParsedLogLine {
+  let envelope: unknown;
+  try { envelope = JSON.parse(input); } catch { /* Plain text or a multiline fragment. */ }
+  if (envelope && typeof envelope === 'object' && 'message' in envelope && typeof envelope.message === 'string') {
+    const fields = Object.fromEntries(Object.entries(envelope));
+    const line = parseTextLine(envelope.message, patterns);
+    const string = (key: string): string | undefined => typeof fields[key] === 'string' ? sanitizeSensitiveData(fields[key]) : undefined;
+    line.format = 'JSON_LINES'; line.loggerName = string('loggerName');
+    line.timestamp = string('timestamp') ?? line.timestamp;
+    line.sequence = typeof fields.sequence === 'number' ? fields.sequence : undefined;
+    line.thread = string('threadName') ?? line.thread;
+    for (const key of ['traceId', 'spanId', 'requestId', 'correlationId'] as const) line[key] = string(key) ?? line[key];
+    line.relevant ||= Boolean(line.traceId || line.spanId || line.requestId || line.correlationId);
+    return line;
+  }
+  return parseTextLine(input, patterns);
+}
+function parseTextLine(input: string, patterns: LogPatterns = {}): ParsedLogLine {
   const text = sanitizeSensitiveData(input);
   // Metadata inside payloads is data, never HTTP/trace identity evidence.
-  const metadata = text.split(/\b(?:request|response)[-_ ]?(?:body|headers)["']?\s*[:=-]/i)[0];
+  const metadata = text.split(/\b(?:request|response)[-_ ]?(?:bodys?|headers)["']?\s*[:=-]/i)[0];
   const identifiers = extractTraceIdentifiers(metadata);
   const timestamp = /\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b/.exec(text)?.[0];
   const http = extractHttpDetails(metadata);
@@ -52,13 +73,14 @@ export function parseLogLine(input: string, patterns: LogPatterns = {}): ParsedL
     ?? /\[([\w.$]*(?:Client|Gateway|Adapter))\]/.exec(metadata)?.[1];
   const thread = /\bthread["']?\s*[:=]\s*["']?([\w.-]+)/i.exec(text)?.[1] ?? /\[([\w-]*(?:exec|thread|pool)[\w-]*)\]/i.exec(text)?.[1];
   const matches = (pattern: RegExp): boolean => { pattern.lastIndex = 0; return pattern.test(text); };
-  const event = matches(patterns.responseBody ?? /\bresponse[-_ ]?body\b/i) ? 'RESPONSE_BODY'
+  const event = matches(patterns.responseBody ?? /\bresponse[-_ ]?bodys?\b/i) ? 'RESPONSE_BODY'
     : matches(patterns.requestBody ?? /\brequest[-_ ]?body\b/i) ? 'REQUEST_BODY'
     : matches(patterns.response ?? /\b(?:API[ _-]+RESPONSE|response)\b|<---/i) ? 'RESPONSE'
     : matches(patterns.request ?? /\bAPI[ _-]+REQUEST\b|--->/i) ? 'REQUEST' : undefined;
   let bodyFragment: string | undefined;
-  if (event === 'REQUEST_BODY' || event === 'RESPONSE_BODY') {
-    const marker = event === 'REQUEST_BODY' ? patterns.requestBody ?? /\brequest[-_ ]?body\b/i : patterns.responseBody ?? /\bresponse[-_ ]?body\b/i;
+  const apiResponsePayload = /\bAPI[ _-]+RESPONSE\s*:\s*(?=[{["<])/i.test(text);
+  if (event === 'REQUEST_BODY' || event === 'RESPONSE_BODY' || apiResponsePayload) {
+    const marker = event === 'REQUEST_BODY' ? patterns.requestBody ?? /\brequest[-_ ]?body\b/i : apiResponsePayload ? /\bAPI[ _-]+RESPONSE\b/i : patterns.responseBody ?? /\bresponse[-_ ]?bodys?\b/i;
     marker.lastIndex = 0;
     const match = marker.exec(text);
     const tail = match ? text.slice(match.index + match[0].length).replace(/^["']?\s*[:=-]?\s*/, '') : '';
@@ -81,16 +103,32 @@ export async function analyzeLogs(filePath: string, traceId?: string, onRelevant
   const metrics: LogAnalysis = { linesProcessed: 0, relevantLines: 0, traceIdsFound: 0, httpCallsFound: 0, externalHttpCallsFound: 0, contextReduction: 0 };
   const traces = new Set<string>();
   let selectedContinuation = false;
+  let selectedHttpDump: boolean = false;
+  const dumpScopes: ParsedLogLine[] = [];
   for await (const rawLine of readLogLines(filePath)) {
     metrics.linesProcessed++;
     const line = parseLogLine(rawLine, patterns);
     if (line.traceId) traces.add(line.traceId);
-    const continuation = !line.traceId && !line.timestamp && (/^\s*(?:at\s|Caused by:|Suppressed:|\.\.\. \d+ more)/.test(line.text) || line.payload !== undefined || line.jsonFragment !== undefined || line.event !== undefined);
-    const selected: boolean = traceId === undefined ? line.relevant || (selectedContinuation && continuation) : line.traceId === traceId || (selectedContinuation && continuation);
-    if (!continuation) selectedContinuation = selected;
+    const continuation: boolean = !line.traceId && !line.timestamp && (selectedHttpDump || /^\s*(?:at\s|Caused by:|Suppressed:|\.\.\. \d+ more)/.test(line.text) || line.payload !== undefined || line.jsonFragment !== undefined || line.event !== undefined || /^\s*$|^\s*[\w-]+:\s*/.test(line.text));
+    const scopedContinuation = dumpScopes.some((scope) => {
+      const keys = ['traceId', 'spanId', 'requestId', 'correlationId', 'loggerName', 'thread'] as const;
+      return keys.some((key) => line[key] !== undefined) && keys.every((key) => line[key] === undefined || line[key] === scope[key]);
+    });
+    const selected: boolean = traceId === undefined ? line.relevant || scopedContinuation || (selectedContinuation && continuation) : line.traceId === traceId || scopedContinuation || (selectedContinuation && continuation);
+    if (!continuation || line.httpCall) selectedContinuation = selected;
+    if (/--->\s+\w+\s+https?:\/\/\S+\s+HTTP\//i.test(line.text)) {
+      selectedHttpDump = selected;
+      if (selected) dumpScopes.push(line);
+    }
     if (!selected) continue;
     metrics.relevantLines++;
     onRelevantLine?.(line);
+    if (/<---\s+END HTTP/i.test(line.text)) {
+      selectedHttpDump = false;
+      const keys = ['traceId', 'spanId', 'requestId', 'correlationId', 'loggerName', 'thread'] as const;
+      const matching = dumpScopes.map((scope, index) => ({ scope, index })).filter(({ scope }) => keys.every((key) => !line[key] || line[key] === scope[key]));
+      if (matching.length === 1) dumpScopes.splice(matching[0].index, 1);
+    }
     if (line.httpCall) {
       metrics.httpCallsFound++;
       if (line.httpCall.external) metrics.externalHttpCallsFound++;

@@ -27,6 +27,7 @@ export class VirtualizationGenerator {
     safe.externalCalls = groupInteractions(safe.externalCalls);
     const result: GenerationResult = { directory, files: [], errors: [], warnings: [] };
     for (const call of safe.externalCalls) {
+      if (call.virtualizationStatus === 'NO_SUCCESSFUL_RESPONSE') { result.warnings.push(`NO_SUCCESSFUL_RESPONSE: ${call.method} ${call.path}; no virtualization generated.`); continue; }
       if (call.conflict) { result.warnings.push(`VIRTUALIZATION_CONFLICT: ${call.method} ${call.path}; ${call.occurrences} occurrences, ${call.distinctBehaviors} distinct behaviors. No response selected automatically.`); continue; }
       const template = createVirtualizationTemplate(call);
       try { validateVirtualization(template); }

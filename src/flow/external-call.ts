@@ -21,10 +21,19 @@ export interface ExternalCall extends BodyEvidence {
   collapseDuplicates?: boolean;
   conflict?: 'VIRTUALIZATION_CONFLICT';
   behaviors?: CallBehavior[];
+  attempts?: HttpAttempt[];
+  virtualizationStatus?: 'NO_SUCCESSFUL_RESPONSE';
   returnType?: string;
   codePath?: string;
   codeUrl?: string;
   reviewReasons?: string[];
+}
+
+export interface HttpAttempt {
+  order: number; outcome: 'PENDING' | 'SUCCESS' | 'ERROR';
+  requestHeaders?: Record<string, unknown>; requestBody?: unknown;
+  status?: number; responseHeaders?: Record<string, unknown>; responseBody?: unknown;
+  error?: string;
 }
 
 export interface CallBehavior {

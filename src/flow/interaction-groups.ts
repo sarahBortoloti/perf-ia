@@ -35,6 +35,7 @@ export function groupInteractions(calls: ExternalCall[]): ExternalCall[] {
       collapseDuplicates: distinct.size === 1 && items.reduce((total, call) => total + (call.occurrences ?? 1), 0) > 1 };
     if (items.some((call) => call.confidence === 'REVIEW_REQUIRED')) result.confidence = 'REVIEW_REQUIRED';
     result.reviewReasons = [...new Set(items.flatMap((call) => call.reviewReasons ?? []))];
+    if (items.some((call) => call.attempts)) result.attempts = items.flatMap((call) => call.attempts ?? []).map((attempt, index) => ({ ...attempt, order: index + 1 }));
     if (distinct.size > 1) {
       result.behaviors = [...distinct.values()]; result.conflict = 'VIRTUALIZATION_CONFLICT'; result.confidence = 'REVIEW_REQUIRED';
       result.reviewReasons.push('VIRTUALIZATION_CONFLICT: endpoint has distinct request/response behaviors');

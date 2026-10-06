@@ -6,4 +6,5 @@ dist/
 output/*
 !output/.gitkeep
 *.log
+!examples/http-format-fixture/*.log
 .DS_Store

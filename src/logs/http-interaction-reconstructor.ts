@@ -1,11 +1,13 @@
 import type { ParsedLogLine } from './log-parser.js';
 import type { ExternalCall } from '../flow/external-call.js';
 import { sanitizeValue } from '../security/sensitive-data-sanitizer.js';
+import { HttpMultilineMachine, type HttpDebugMetrics } from './http-multiline-machine.js';
 
 interface Pending {
   call: ExternalCall; sequence: number; timestamp?: number; thread?: string;
   responded: boolean; complete: boolean; orphan: boolean;
   transport?: string;
+  logger?: string;
 }
 export class HttpInteractionReconstructor {
   readonly calls: ExternalCall[] = [];
@@ -15,6 +17,23 @@ export class HttpInteractionReconstructor {
   private previous?: Pending;
   private buffer?: { target: Pending; kind: 'requestBody' | 'responseBody'; text: string };
   private correlationReason = '';
+  private multiline = new HttpMultilineMachine();
+  private jsonLines = false;
+  private uncorrelatedBodies = 0;
+  private requests = 0;
+  private responses = 0;
+  private firstSeen = new WeakMap<ExternalCall, number>();
+  get debugMetrics(): HttpDebugMetrics {
+    const calls = [...this.calls, ...this.multiline.calls].filter((call) => call.method && call.path);
+    return { formats: [...(this.jsonLines ? ['JSON_LINES'] : []), ...(this.multiline.metrics.httpBlocksDetected ? ['HTTP_MULTILINE'] : [])],
+      ...this.multiline.metrics, requestsDetected: this.requests + this.multiline.metrics.requestsDetected,
+      responsesDetected: this.responses + this.multiline.metrics.responsesDetected, interactionsReconstructed: calls.length,
+      successfulInteractions: calls.filter((call) => call.status !== undefined && call.virtualizationStatus !== 'NO_SUCCESSFUL_RESPONSE').length,
+      failedOnlyInteractions: calls.filter((call) => call.virtualizationStatus === 'NO_SUCCESSFUL_RESPONSE').length,
+      requestBodiesCaptured: this.calls.filter((call) => call.requestBody !== undefined).length + this.multiline.metrics.requestBodiesCaptured,
+      responseBodiesCaptured: this.calls.filter((call) => call.responseBody !== undefined).length + this.multiline.metrics.responseBodiesCaptured,
+      uncorrelatedResponseBodies: this.uncorrelatedBodies + this.multiline.metrics.uncorrelatedResponseBodies };
+  }
 
   private explain(reason: string, call?: ExternalCall): void {
     this.diagnostics.push(`${reason}${call ? `: interaction ${call.order} ${call.method ?? '?'} ${call.path ?? '?'}` : ''}`);
@@ -30,12 +49,22 @@ export class HttpInteractionReconstructor {
     for (const key of ['traceId', 'spanId', 'requestId', 'correlationId'] as const) {
       if (line[key]) candidates = candidates.filter((item) => item.call[key] === line[key]);
     }
+    if (line.loggerName) candidates = candidates.filter((item) => item.logger === line.loggerName);
+    if (line.thread) candidates = candidates.filter((item) => item.thread === line.thread);
     if (line.clientName) candidates = candidates.filter((item) => item.call.client === line.clientName && (!line.clientMethod || item.call.clientMethod === line.clientMethod));
     else if (line.http.client) candidates = candidates.filter((item) => item.transport === line.http.client);
     if (line.http.method) candidates = candidates.filter((item) => !item.call.method || item.call.method === line.http.method);
     if (line.http.path) candidates = candidates.filter((item) => !item.call.path || item.call.path === line.http.path);
     if (line.http.url) candidates = candidates.filter((item) => !item.call.url || item.call.url === line.http.url);
-    const explicit = line.spanId || line.requestId || line.correlationId || line.clientName || line.http.path;
+    const explicit = line.spanId || line.requestId || line.correlationId || line.clientName || line.http.path || line.loggerName || line.thread;
+    if (line.thread && !line.spanId && !line.requestId && !line.correlationId && !line.clientName && !line.http.path && !line.loggerName) {
+      candidates = candidates.filter((item) => this.sequence - item.sequence <= 12 && (!line.timestamp || item.timestamp === undefined || Math.abs(Date.parse(line.timestamp) - item.timestamp) <= 5000));
+    }
+    // API body markers are independent log events, unlike payload lines inside an HTTP dump.
+    if (line.responseBody !== undefined && !explicit) {
+      candidates.forEach((item) => this.review(item, 'Ambiguous unscoped response body'));
+      return [];
+    }
     this.correlationReason = line.spanId || line.requestId || line.correlationId ? 'trace + span/request/correlation ID'
       : line.clientName ? 'explicit client identity' : line.http.path ? 'method + URL/path' : 'unique thread/temporal sequence fallback';
     if (!explicit) {
@@ -48,6 +77,11 @@ export class HttpInteractionReconstructor {
   }
   consume(line: ParsedLogLine): void {
     this.sequence++;
+    this.jsonLines ||= line.format === 'JSON_LINES';
+    if (this.multiline.consume(line)) {
+      for (const call of this.multiline.calls) if (!this.firstSeen.has(call)) this.firstSeen.set(call, this.sequence);
+      return;
+    }
     if (line.payload !== undefined || line.jsonFragment) {
       const target = this.buffer?.target ?? this.previous;
       if (!target || target.complete || line.timestamp || line.traceId) { this.explain('Discarded unattached payload'); return; }
@@ -73,6 +107,7 @@ export class HttpInteractionReconstructor {
     const combined = Boolean(line.httpCall?.external && !/API[ _-]+RESPONSE|<---|\bResponse\s+\d/i.test(line.text) && (line.responseBody !== undefined || line.http.status !== undefined));
     const response = !combined && (line.event === 'RESPONSE' || line.event === 'RESPONSE_BODY' || line.responseBody !== undefined || line.responseHeaders !== undefined || line.http.status !== undefined && !line.httpCall);
     const request = line.event === 'REQUEST' || line.event === 'REQUEST_BODY' || line.httpCall?.external;
+    if (response && line.http.status !== undefined) this.responses++;
     if (!response && !request) { this.previous = undefined; return; }
     // Inbound entrypoint/response lines without external evidence are never virtualized.
     if (line.httpCall && !line.httpCall.external || response && !line.event && !line.http.client && !line.responseHeaders && line.responseBody === undefined) { this.previous = undefined; return; }
@@ -82,23 +117,26 @@ export class HttpInteractionReconstructor {
     if (request && !response && !bodyOnly && !line.requestHeaders && candidates.some((item) => item.call.method && item.call.path)) candidates = [];
     if (candidates.length > 1) {
       candidates.forEach((item) => this.review(item, 'Ambiguous request/response correlation'));
+      if (line.responseBody !== undefined) this.uncorrelatedBodies++;
       this.previous = undefined; this.explain('Discarded ambiguous event; no payload assigned'); return;
     }
     let target = candidates[0];
     if (!target) {
-      if (response && !line.http.path && !line.http.url) { this.explain('Discarded orphan response without endpoint'); this.previous = undefined; return; }
+      if (response && !line.http.path && !line.http.url) { if (line.responseBody !== undefined) this.uncorrelatedBodies++; this.explain('REVIEW_REQUIRED: Discarded orphan response without endpoint'); this.previous = undefined; return; }
       if (!response && !line.httpCall?.external && !line.event) return;
       const call: ExternalCall = { order: this.calls.length + 1, source: 'LOG', bodySource: 'EMPTY', confidence: 'REVIEW_REQUIRED',
-        client: line.clientName ?? line.http.client, clientMethod: line.clientMethod,
+        client: line.clientName ?? line.http.client ?? line.loggerName, clientMethod: line.clientMethod,
         method: line.http.method, url: line.http.url, path: line.http.path,
         traceId: line.traceId, spanId: line.spanId, requestId: line.requestId, correlationId: line.correlationId };
-      target = { call, sequence: this.sequence, timestamp: line.timestamp ? Date.parse(line.timestamp) : undefined, thread: line.thread, transport: line.http.client, responded: false, complete: false, orphan: response };
+      target = { call, sequence: this.sequence, timestamp: line.timestamp ? Date.parse(line.timestamp) : undefined, thread: line.thread, transport: line.http.client, logger: line.loggerName, responded: false, complete: false, orphan: response };
+      if (!response) this.requests++;
       this.calls.push(call); this.pending.push(target);
+      this.firstSeen.set(call, this.sequence);
       this.explain(response ? 'Found orphan response endpoint' : 'Found external request from LOG', call);
       if (response) this.review(target, 'Response without corresponding request');
     } else {
       this.explain(`Correlated event by ${this.correlationReason}`, target.call);
-      if (!line.spanId && !line.requestId && !line.correlationId && !line.clientName && !line.http.path && (line.timestamp || line.traceId)) this.review(target, 'Temporal correlation requires review');
+      if (!line.spanId && !line.requestId && !line.correlationId && !line.clientName && !line.http.path && !line.loggerName && !line.thread && (line.timestamp || line.traceId)) this.review(target, 'Temporal correlation requires review');
     }
     const call = target.call;
     call.method ??= line.http.method; call.path ??= line.http.path; call.url ??= line.http.url;
@@ -114,7 +152,7 @@ export class HttpInteractionReconstructor {
     target.sequence = this.sequence;
     this.previous = target;
   }
-  resetContinuation(): void { this.previous = undefined; this.buffer = undefined; }
+  resetContinuation(): void { this.previous = undefined; this.buffer = undefined; this.multiline.resetContinuation(); }
   finish(): ExternalCall[] {
     if (this.buffer?.text) this.review(this.buffer.target, 'Incomplete multiline body');
     for (const item of this.pending) {
@@ -122,10 +160,11 @@ export class HttpInteractionReconstructor {
       item.call.confidence = item.call.responseBody !== undefined && !item.call.reviewReasons?.length && !item.orphan ? 'HIGH' : 'REVIEW_REQUIRED';
       if (item.call.responseBody === undefined) this.review(item, 'Response body not captured');
     }
-    return this.calls.filter((call) => {
+    const multilineCalls = this.multiline.finish(); this.diagnostics.push(...this.multiline.diagnostics);
+    return [...this.calls, ...multilineCalls].filter((call) => {
       if (call.method && call.path) return true;
       this.explain('Discarded incomplete interaction: HTTP method/path not established', call);
       return false;
-    });
+    }).sort((a, b) => (this.firstSeen.get(a) ?? 0) - (this.firstSeen.get(b) ?? 0)).map((call, index) => ({ ...call, order: index + 1 }));
   }
 }

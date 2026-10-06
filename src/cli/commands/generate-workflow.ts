@@ -60,7 +60,14 @@ export async function generateWorkflow(options: {
     if (call.conflict) lines.push(`⚠ VIRTUALIZATION_CONFLICT: ${call.occurrences} occurrences, ${call.distinctBehaviors} distinct behaviors`);
   }
   lines.push(...generated.warnings.map((warning) => `⚠ ${warning}`));
-  if (options.debug) lines.push('', 'HTTP debug (payloads omitted)', ...diagnostics);
+  if (options.debug) {
+    const http = context.httpAnalysis;
+    if (http) lines.push('', `Log format: ${http.formats.join(' + ') || 'TEXT'}`, `HTTP blocks detected: ${http.httpBlocksDetected}`,
+      `Requests detected: ${http.requestsDetected}`, `Responses detected: ${http.responsesDetected}`, `Errors detected: ${http.errorsDetected}`, `Retries detected: ${http.retriesDetected}`,
+      `Interactions reconstructed: ${http.interactionsReconstructed}`, `Successful interactions: ${http.successfulInteractions}`, `Failed-only interactions: ${http.failedOnlyInteractions}`,
+      `Request bodies captured: ${http.requestBodiesCaptured}`, `Response bodies captured: ${http.responseBodiesCaptured}`, `Uncorrelated response bodies: ${http.uncorrelatedResponseBodies}`);
+    lines.push('', 'HTTP debug (payloads omitted)', ...diagnostics);
+  }
   if (generated.files.some((file) => file.confidence === 'REVIEW_REQUIRED')) lines.push('', 'Files marked REVIEW_REQUIRED must be reviewed before importing into EasyPerf.');
   console.log(sanitizeSensitiveData(lines.join('\n')));
   if (generated.errors.length) throw new Error('Some virtualizations failed validation; see errors above.');

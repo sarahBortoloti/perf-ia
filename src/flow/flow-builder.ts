@@ -64,7 +64,7 @@ export class FlowBuilder {
       if (call.conflict) runtime.diagnostics.push(`REVIEW_REQUIRED / VIRTUALIZATION_CONFLICT: ${call.method} ${call.path} (${call.distinctBehaviors} behaviors)`);
     }
     const context: FlowContext = { application: options.application, flow: options.flow, entrypoint: options.entrypoint,
-      traceId: options.traceId, externalCalls, runtimeAnalysis: {
+      traceId: options.traceId, externalCalls, httpAnalysis: runtime.debugMetrics, runtimeAnalysis: {
         interactionsFound: calls.length, uniqueExternalEndpoints: new Set(calls.filter((call) => call.method && call.path).map((call) => `${call.method} ${call.path}`)).size,
         duplicateOccurrencesCollapsed: externalCalls.filter((call) => call.source !== 'CODE').reduce((total, call) => total + (call.occurrences ?? 1) - (call.distinctBehaviors ?? 1), 0),
         responseBodiesCaptured: calls.filter((call) => call.responseBody !== undefined).length,

@@ -1,0 +1,20 @@
+---> POST https://example.test/mainframe/proposal HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer fictional-authorization
+Proxy-Authorization: fictional-proxy
+api-key: fictional-api-key
+x-api-key: fictional-x-api-key
+assertion: eyJhbGciOiJub25lIn0.eyJzdWIiOiJmaWN0aW9uYWwifQ.fictional-signature
+cookie: session=fictional-cookie
+
+{"proposal":"123","status":"ACCEPTED","password":"fictional-password"}
+
+---> END HTTP (20-byte body)
+<--- 200
+Content-Type: application/json
+set-cookie: session=fictional-cookie
+X-Signature: fictional-response-signature
+
+{"code":"00","result":"SUCCESS","access_token":"fictional-access-token","refresh_token":"fictional-refresh-token"}
+
+<--- END HTTP
