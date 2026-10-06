@@ -9,7 +9,8 @@
     "test": "vitest run",
     "lint": "eslint src tests --ext .ts",
     "generate": "tsx src/cli/index.ts generate",
-    "publish": "tsx src/cli/index.ts publish"
+    "publish": "tsx src/cli/index.ts publish",
+    "configure": "tsx src/cli/index.ts configure"
   },
   "dependencies": {
     "@inquirer/prompts": "^7.10.1",

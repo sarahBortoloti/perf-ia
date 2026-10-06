@@ -1,0 +1,7 @@
+{
+  "application": "configure-fixture",
+  "flow": "proposal",
+  "publishedAt": "2026-01-01T00:00:00.000Z",
+  "baseUrl": "http://virtualization.example.test/",
+  "services": [{ "method": "POST", "path": "/proposal", "url": "http://virtualization.example.test/proposal" }]
+}

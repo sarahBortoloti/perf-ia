@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import { registerGenerateCommand } from './commands/generate.command.js';
 import { registerPublishCommand } from './commands/publish.command.js';
+import { registerConfigureCommand } from './commands/configure.command.js';
 import { registerVirtualizeCommand } from './commands/virtualize.command.js';
 
 export function createProgram(): Command {
@@ -10,6 +11,7 @@ export function createProgram(): Command {
   registerGenerateCommand(program);
   registerPublishCommand(program);
   registerVirtualizeCommand(program);
+  registerConfigureCommand(program);
   return program;
 }
 

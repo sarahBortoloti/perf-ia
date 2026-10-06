@@ -1,0 +1,10 @@
+{
+  "application": "configure-fixture",
+  "flow": "proposal",
+  "entrypoint": { "method": "POST", "path": "/accept" },
+  "externalCalls": [{
+    "client": "proposal", "clientMethod": "create", "method": "POST", "path": "/proposal",
+    "url": "https://old-proposal.example.test/proposal", "source": "CODE_AND_LOG",
+    "codePath": "src/main/java/fictional/ProposalClient.java"
+  }]
+}

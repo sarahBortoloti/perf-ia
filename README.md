@@ -184,3 +184,35 @@ Os testes usam `tests/fixtures/easyperf.html` com todas as requisições interce
 localmente. Não usam EasyPerf real, internet ou credenciais reais. Para os testes
 com browser, Chromium deve estar instalado; Chrome local é utilizado como fallback
 quando Chromium não estiver disponível.
+
+## Configure
+
+Depois de publicar, execute `npm run configure`. O comando seleciona um
+`publication.json` em `output`, pede o repositório e o ambiente e correlaciona
+as integrações do FlowContext com suas propriedades. Se o caminho da aplicação
+não estiver salvo, ele será solicitado para consultar os FeignClients.
+
+```bash
+npm run configure -- --dry-run
+npm run configure
+# Publicação fictícia para experimentar sem alterar arquivos:
+npm run configure -- --dry-run --publication ./examples/configure-fixture/published/publication.json
+```
+
+Na fixture, selecione o repositório externo `./examples/configure-fixture/config`,
+informe a aplicação `./examples/configure-fixture/app` e escolha HOM.
+O preview mostra a cadeia `${proposal.url}` → `${API_PROPOSAL_URL}` →
+`hom/values.yaml`. Cada alteração real exige confirmação individual.
+
+Produção e propriedades sensíveis são bloqueadas. Configurações ausentes,
+ambíguas ou sem correlação segura geram avisos. Defaults `${VAR:default}` podem
+ser propostos quando a variável não está definida no repositório, com aviso de
+que variáveis externas podem prevalecer. Nenhuma URL Java literal é reescrita.
+
+`configuration.json`, junto da publicação em `output/<application>/<flow>`,
+registra propriedade, arquivo, ambiente, valores anterior/novo e `applied` para
+rollback lógico. Não copia arquivos inteiros nem secrets. O helper
+`rollbackConfiguration` restaura apenas propriedades que ainda correspondem ao
+valor aplicado. Em diretórios Git, o comando executa `git diff` e exibe somente
+as propriedades aprovadas, evitando expor outras alterações ou secrets.
+Dry-run não grava configurações ou metadados. Não há commit, push ou PR.
